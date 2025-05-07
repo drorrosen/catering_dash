@@ -259,22 +259,22 @@ if df_processed_data_global is None or df_processed_data_global.empty:
 # --- Re-populate sidebar filters based on the final loaded data ---
 with st.sidebar:
     # Event Type Filter (using the final df_processed_data_global)
-    st.subheader("Event Type")
+    # st.subheader("Event Type")
     unique_event_types = sorted(df_processed_data_global['EventType_Description'].unique())
-    selected_event_types = st.multiselect("Select Event Types", unique_event_types, default=unique_event_types, label_visibility="collapsed")
+    selected_event_types = st.multiselect("Event Type", unique_event_types, default=unique_event_types)
     
     st.subheader("Catered Status")
     catered_only_filter_option = st.selectbox("Filter Catered Events", ["All Events", "Catered Only", "Non-Catered Only"], index=0, label_visibility="collapsed")
     
-    st.subheader("Business Group")
+    # st.subheader("Business Group")
     unique_business_groups = sorted(df_processed_data_global['BusinessGroup_Description'].unique())
-    selected_business_groups = st.multiselect("Select Business Groups", unique_business_groups, default=unique_business_groups, label_visibility="collapsed")
+    selected_business_groups = st.multiselect("Business Group", unique_business_groups, default=unique_business_groups)
     
     if 'UsageName' in df_processed_data_global.columns:
-        st.subheader("Planner Name")
+        # st.subheader("Planner Name")
         unique_planners = sorted(df_processed_data_global['UsageName'].dropna().unique())
         if not unique_planners: unique_planners = ['N/A']
-        selected_planners = st.multiselect("Select Planner Names", unique_planners, default=unique_planners, label_visibility="collapsed")
+        selected_planners = st.multiselect("Planner Name", unique_planners, default=unique_planners)
     else:
         selected_planners = []
             
@@ -497,7 +497,7 @@ with tab_forecasting:
         min_date_from_data = pd.to_datetime(df_processed_data_global['StartDate']).min().date()
         max_date_from_data = pd.to_datetime(df_processed_data_global['StartDate']).max().date()
 
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3) # Added a third column for the new radio button
         with col1:
             default_forecast_start_val = pd.Timestamp('2024-11-01', tz='UTC')
             if default_forecast_start_val.date() > max_date_from_data:
@@ -519,12 +519,23 @@ with tab_forecasting:
                 value=st.session_state.get('forecast_horizon_input_val', 4),
                 key="forecast_horizon_input_form"
             )
+        with col3: # New column for forecast mode
+            forecast_mode_input = st.radio(
+                "Forecast Mode",
+                options=["Standard (Faster)", "Advanced (Slower, Optuna)"],
+                index=0, # Default to Standard
+                key="forecast_mode_input_form",
+                help="Standard mode uses default parameters. Advanced mode uses Optuna for hyperparameter tuning (slower, more memory)."
+            )
         
         submit_button = st.form_submit_button(label="Generate Forecasts")
 
     if submit_button:
         st.session_state.forecast_start_input_val = forecast_start_input
         st.session_state.forecast_horizon_input_val = forecast_horizon_input
+        st.session_state.forecast_mode_input_val = forecast_mode_input # Save the mode
+
+        selected_forecast_mode = "standard" if forecast_mode_input == "Standard (Faster)" else "advanced"
 
         forecast_start_ts = pd.Timestamp(forecast_start_input, tz='UTC')
         forecast_cutoff = pd.Timestamp(forecast_start_ts.year, forecast_start_ts.month, 1, tz='UTC')
@@ -547,7 +558,7 @@ with tab_forecasting:
                 revenue_per_month.at[idx, 'ActualRevenue'] = np.nan
         st.session_state.revenue_df_full_history_display = create_features(revenue_per_month.copy(), 'ActualRevenue', 'Month')
         revenue_training_data = st.session_state.revenue_df_full_history_display[st.session_state.revenue_df_full_history_display['Month'] < forecast_cutoff].copy()
-        st.session_state.revenue_predictions = train_revenue_model(revenue_training_data, forecast_horizon_input)
+        st.session_state.revenue_predictions = train_revenue_model(revenue_training_data, forecast_horizon_input, forecast_mode=selected_forecast_mode)
 
         # Event Count Forecasting Data Preparation
         df_events = df_processed_data_global.copy()
@@ -562,7 +573,7 @@ with tab_forecasting:
                 events_per_month.at[idx, 'Event_Count'] = np.nan
         st.session_state.event_df_full_history_display = create_features(events_per_month.copy(), 'Event_Count', 'Month')
         event_training_data = st.session_state.event_df_full_history_display[st.session_state.event_df_full_history_display['Month'] < forecast_cutoff].copy()
-        st.session_state.event_predictions = train_event_count_model(event_training_data, forecast_horizon_input)
+        st.session_state.event_predictions = train_event_count_model(event_training_data, forecast_horizon_input, forecast_mode=selected_forecast_mode)
 
         # Catering Event Forecasting Data Preparation
         catering_df_raw = df_processed_data_global[df_processed_data_global['EventType_Description'] == 'Catering Only'].copy()
@@ -577,7 +588,7 @@ with tab_forecasting:
                 catering_per_month.at[idx, 'Event_Count'] = np.nan
         st.session_state.catering_features_full_history_display = create_features(catering_per_month.copy(), 'Event_Count', 'Month')
         catering_training_data = st.session_state.catering_features_full_history_display[st.session_state.catering_features_full_history_display['Month'] < forecast_cutoff].copy()
-        st.session_state.catering_predictions = train_catering_model(catering_training_data, forecast_horizon_input)
+        st.session_state.catering_predictions = train_catering_model(catering_training_data, forecast_horizon_input, forecast_mode=selected_forecast_mode)
 
         # Show a progress indicator while models train
         with st.spinner('Training forecasting models and generating predictions...'):
