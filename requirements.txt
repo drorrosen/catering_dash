@@ -7,13 +7,4 @@ xgboost
 optuna
 scikit-learn
 plotly
-streamlit
-pandas
-numpy
-matplotlib
-seaborn
-xgboost
-optuna
-scikit-learn
-plotly
 openai 
