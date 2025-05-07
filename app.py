@@ -522,10 +522,10 @@ with tab_forecasting:
         with col3: # New column for forecast mode
             forecast_mode_input = st.radio(
                 "Forecast Mode",
-                options=["Standard (Faster)", "Advanced (Slower, Optuna)"],
-                index=0, # Default to Standard
+                options=["Lower (Fastest, RF)", "Standard (XGBoost, CIs)", "Advanced (XGBoost, Optuna, CIs)"],
+                index=0, # Default to Lower (RF)
                 key="forecast_mode_input_form",
-                help="Standard mode uses default parameters. Advanced mode uses Optuna for hyperparameter tuning (slower, more memory)."
+                help="Lower: RandomForest (fastest, no CIs). Standard: XGBoost defaults + CIs. Advanced: XGBoost + Optuna + CIs (slowest)."
             )
         
         submit_button = st.form_submit_button(label="Generate Forecasts")
@@ -535,7 +535,12 @@ with tab_forecasting:
         st.session_state.forecast_horizon_input_val = forecast_horizon_input
         st.session_state.forecast_mode_input_val = forecast_mode_input # Save the mode
 
-        selected_forecast_mode = "standard" if forecast_mode_input == "Standard (Faster)" else "advanced"
+        if forecast_mode_input == "Lower (Fastest, RF)":
+            selected_forecast_mode = "lower_rf"
+        elif forecast_mode_input == "Standard (XGBoost, CIs)":
+            selected_forecast_mode = "standard_xgb"
+        else: # Advanced (XGBoost, Optuna, CIs)
+            selected_forecast_mode = "advanced_xgb"
 
         forecast_start_ts = pd.Timestamp(forecast_start_input, tz='UTC')
         forecast_cutoff = pd.Timestamp(forecast_start_ts.year, forecast_start_ts.month, 1, tz='UTC')
