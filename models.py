@@ -5,26 +5,39 @@ from xgboost import XGBRegressor
 import optuna
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-def train_revenue_model(revenue_df, forecast_horizon=4, n_trials=50, n_bootstraps=100):
+# Define default parameters for Standard mode (faster, less resource-intensive)
+DEFAULT_XGB_PARAMS_FOR_STANDARD_MODE = {
+    "n_estimators": 100,
+    "max_depth": 5,
+    "learning_rate": 0.1,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 1,
+    "gamma": 0.1,
+}
+
+def train_revenue_model(revenue_df, forecast_horizon, forecast_mode="standard", n_trials=50, n_bootstraps=100):
     """
-    Train an XGBoost model for revenue forecasting with Optuna hyperparameter optimization
-    and generate forecasts with confidence intervals using bootstrap.
+    Train an XGBoost model for revenue forecasting.
+    Supports 'standard' mode (default XGB params, no CI) and 'advanced' mode (Optuna HPO, Bootstrap CI).
     
     Parameters:
     -----------
     revenue_df : pandas.DataFrame
-        DataFrame with the following columns: 'Month', 'ActualRevenue', and feature columns
+        DataFrame with 'Month', 'ActualRevenue', and feature columns
     forecast_horizon : int
         Number of months to forecast ahead
-    n_trials : int
-        Number of trials for Optuna hyperparameter optimization
-    n_bootstraps : int
-        Number of bootstrap iterations for confidence interval
+    forecast_mode : str, optional
+        'standard' or 'advanced'. Defaults to 'standard'.
+    n_trials : int, optional
+        Number of Optuna trials if mode is 'advanced'. Defaults to 50.
+    n_bootstraps : int, optional
+        Number of bootstrap iterations if mode is 'advanced'. Defaults to 100.
     
     Returns:
     --------
     pandas.DataFrame
-        DataFrame with forecasted values and confidence intervals
+        DataFrame with forecasted values and confidence intervals (NaN for CI in 'standard' mode)
     """
     # Split data into features and target
     X = revenue_df.drop(columns=['Month', 'ActualRevenue'])
@@ -53,38 +66,47 @@ def train_revenue_model(revenue_df, forecast_horizon=4, n_trials=50, n_bootstrap
     X_train, X_test = X.iloc[:-n_test] if n_test > 0 else X, X.iloc[-n_test:] if n_test > 0 else pd.DataFrame()
     y_train, y_test = y.iloc[:-n_test] if n_test > 0 else y, y.iloc[-n_test:] if n_test > 0 else pd.Series()
     
-    # Define Optuna objective function
-    def objective(trial):
-        params = {
-            "n_estimators": trial.suggest_int("n_estimators", 50, 400),
-            "max_depth": trial.suggest_int("max_depth", 2, 7),
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
-            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
-            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
-            "gamma": trial.suggest_float("gamma", 0, 1),
-        }
+    best_params = {}
+    effective_n_bootstraps = 0
+
+    if forecast_mode == "standard":
+        best_params = DEFAULT_XGB_PARAMS_FOR_STANDARD_MODE.copy()
+        effective_n_bootstraps = 0 # No CI for standard mode
+    elif forecast_mode == "advanced":
+        # Define Optuna objective function
+        def objective(trial):
+            params = {
+                "n_estimators": trial.suggest_int("n_estimators", 50, 400),
+                "max_depth": trial.suggest_int("max_depth", 2, 7),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+                "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+                "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+                "gamma": trial.suggest_float("gamma", 0, 1),
+            }
+            
+            model = XGBRegressor(
+                **params,
+                objective="reg:squarederror",
+                random_state=42
+            )
+            if not X_train.empty and not y_train.empty:
+                model.fit(X_train, y_train)
+                if not X_test.empty and not y_test.empty:
+                    preds = model.predict(X_test)
+                    rmse = np.sqrt(mean_squared_error(y_test, preds))
+                    return rmse
+            return float('inf') # Return high RMSE if training/testing is not possible
         
-        model = XGBRegressor(
-            **params,
-            objective="reg:squarederror",
-            random_state=42
-        )
-        if not X_train.empty and not y_train.empty:
-            model.fit(X_train, y_train)
-            if not X_test.empty and not y_test.empty:
-                preds = model.predict(X_test)
-                rmse = np.sqrt(mean_squared_error(y_test, preds))
-                return rmse
-        return float('inf') # Return high RMSE if training/testing is not possible
-    
-    # Run Optuna optimization
-    study = optuna.create_study(direction="minimize")
-    # Reduce trials if dataset is very small to prevent Optuna errors
-    actual_n_trials = n_trials if len(X_train) >= n_test + 1 and n_test > 0 else max(1, n_trials // 5)
-    study.optimize(objective, n_trials=actual_n_trials, show_progress_bar=False) # Turn off progress bar for Streamlit
-    best_params = study.best_params
-    
+        # Run Optuna optimization
+        study = optuna.create_study(direction="minimize")
+        actual_n_trials = n_trials if len(X_train) >= n_test + 1 and n_test > 0 else max(1, n_trials // 5)
+        study.optimize(objective, n_trials=actual_n_trials, show_progress_bar=False)
+        best_params = study.best_params
+        effective_n_bootstraps = n_bootstraps # Use specified n_bootstraps for advanced mode
+    else:
+        raise ValueError(f"Invalid forecast_mode: {forecast_mode}. Choose 'standard' or 'advanced'.")
+
     # Train final model on full dataset (available for training)
     final_model = XGBRegressor(
         **best_params,
@@ -147,21 +169,20 @@ def train_revenue_model(revenue_df, forecast_horizon=4, n_trials=50, n_bootstrap
     # --- End of Recursive Forecasting with the main model ---
 
     # Dynamic block size for bootstrap
-    block_size = min(12, len(X)) if len(X) > 0 else 1 # Ensure block_size is at least 1 if X is not empty
+    block_size = min(12, len(X)) if len(X) > 0 else 1 
     
-    if len(X) > 0 and len(X) >= block_size: # Check if X is not empty and has enough data for at least one block
-        boot_preds_ci = np.zeros((n_bootstraps, forecast_horizon))
+    if effective_n_bootstraps > 0 and len(X) > 0 and len(X) >= block_size:
+        boot_preds_ci = np.zeros((effective_n_bootstraps, forecast_horizon))
         blocks = []
-        # Ensure loop for blocks can run: len(X) - block_size + 1 must be > 0
         if len(X) >= block_size:
             for i in range(len(X) - block_size + 1):
                 X_block = X.iloc[i:i+block_size]
                 y_block = y.iloc[i:i+block_size]
                 blocks.append((X_block, y_block))
         
-        if blocks: # Proceed only if blocks were actually created
-            k_val = max(1, int(np.ceil(len(X)/block_size))) # Ensure enough blocks are sampled if len(X) is small
-            for b in range(n_bootstraps):
+        if blocks: 
+            k_val = max(1, int(np.ceil(len(X)/block_size))) 
+            for b in range(effective_n_bootstraps): # Use effective_n_bootstraps
                 random.seed(b)
                 sampled_blocks = random.choices(blocks, k=k_val)
                 
@@ -211,26 +232,28 @@ def train_revenue_model(revenue_df, forecast_horizon=4, n_trials=50, n_bootstrap
     
     return forecast_df
 
-def train_event_count_model(event_df, forecast_horizon=4, n_trials=50, n_bootstraps=100):
+def train_event_count_model(event_df, forecast_horizon, forecast_mode="standard", n_trials=50, n_bootstraps=100):
     """
-    Train an XGBoost model for event count forecasting with Optuna hyperparameter optimization
-    and generate forecasts with confidence intervals using bootstrap.
+    Train an XGBoost model for event count forecasting.
+    Supports 'standard' (default XGB params, no CI) and 'advanced' (Optuna HPO, Bootstrap CI).
     
     Parameters:
     -----------
     event_df : pandas.DataFrame
-        DataFrame with the following columns: 'Month', 'Event_Count', and feature columns
+        DataFrame with 'Month', 'Event_Count', and feature columns
     forecast_horizon : int
         Number of months to forecast ahead
-    n_trials : int
-        Number of trials for Optuna hyperparameter optimization
-    n_bootstraps : int
-        Number of bootstrap iterations for confidence interval
+    forecast_mode : str, optional
+        'standard' or 'advanced'. Defaults to 'standard'.
+    n_trials : int, optional
+        Number of Optuna trials if mode is 'advanced'. Defaults to 50.
+    n_bootstraps : int, optional
+        Number of bootstrap iterations if mode is 'advanced'. Defaults to 100.
     
     Returns:
     --------
     pandas.DataFrame
-        DataFrame with forecasted values and confidence intervals
+        DataFrame with forecasted values and confidence intervals (NaN for CI in 'standard' mode)
     """
     # Split data into features and target
     X = event_df.drop(columns=['Month', 'Event_Count'])
@@ -255,59 +278,49 @@ def train_event_count_model(event_df, forecast_horizon=4, n_trials=50, n_bootstr
     X_train, X_test = X.iloc[:-n_test] if n_test > 0 else X, X.iloc[-n_test:] if n_test > 0 else pd.DataFrame()
     y_train, y_test = y.iloc[:-n_test] if n_test > 0 else y, y.iloc[-n_test:] if n_test > 0 else pd.Series()
     
-    # Define Optuna objective function
-    def objective(trial):
-        params = {
-            "n_estimators": trial.suggest_int("n_estimators", 50, 400),
-            "max_depth": trial.suggest_int("max_depth", 2, 7),
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
-            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
-            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
-            "gamma": trial.suggest_float("gamma", 0, 1),
-        }
+    best_params = {}
+    effective_n_bootstraps = 0
+
+    if forecast_mode == "standard":
+        best_params = DEFAULT_XGB_PARAMS_FOR_STANDARD_MODE.copy()
+        effective_n_bootstraps = 0
+    elif forecast_mode == "advanced":
+        def objective(trial):
+            params = {
+                "n_estimators": trial.suggest_int("n_estimators", 50, 400),
+                "max_depth": trial.suggest_int("max_depth", 2, 7),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+                "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+                "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+                "gamma": trial.suggest_float("gamma", 0, 1),
+            }
+            model = XGBRegressor(**params, objective="reg:squarederror", random_state=42)
+            if not X_train.empty and not y_train.empty:
+                model.fit(X_train, y_train)
+                if not X_test.empty and not y_test.empty:
+                    preds = model.predict(X_test)
+                    rmse = np.sqrt(mean_squared_error(y_test, preds))
+                    return rmse
+            return float('inf')
         
-        model = XGBRegressor(
-            **params,
-            objective="reg:squarederror",
-            random_state=42
-        )
-        if not X_train.empty and not y_train.empty:
-            model.fit(X_train, y_train)
-            if not X_test.empty and not y_test.empty:
-                preds = model.predict(X_test)
-                rmse = np.sqrt(mean_squared_error(y_test, preds))
-                return rmse
-        return float('inf')
+        study = optuna.create_study(direction="minimize")
+        actual_n_trials = n_trials if len(X_train) >= n_test + 1 and n_test > 0 else max(1, n_trials // 5)
+        study.optimize(objective, n_trials=actual_n_trials, show_progress_bar=False)
+        best_params = study.best_params
+        effective_n_bootstraps = n_bootstraps
+    else:
+        raise ValueError(f"Invalid forecast_mode: {forecast_mode}. Choose 'standard' or 'advanced'.")
     
-    # Run Optuna optimization
-    study = optuna.create_study(direction="minimize")
-    actual_n_trials = n_trials if len(X_train) >= n_test + 1 and n_test > 0 else max(1, n_trials // 5)
-    study.optimize(objective, n_trials=actual_n_trials, show_progress_bar=False)
-    best_params = study.best_params
-    
-    # Train final model on full dataset
-    final_model = XGBRegressor(
-        **best_params,
-        objective="reg:squarederror",
-        random_state=42
-    )
+    final_model = XGBRegressor(**best_params, objective="reg:squarederror", random_state=42)
     final_model.fit(X, y)
     
-    # Generate forecasts for future periods
     last_date = event_df['Month'].max()
-    
-    # Get the timezone from the last date (if it exists)
     tz = last_date.tz
-    
-    # Create future months with the same timezone as the input data
     future_months = [last_date + pd.DateOffset(months=i+1) for i in range(forecast_horizon)]
-    
-    # Ensure consistent timezone
     if tz is not None:
         future_months = [date.tz_localize(tz) if date.tz is None else date for date in future_months]
     
-    # Create dataframe to store forecasts
     forecast_df = pd.DataFrame({
         'Month': future_months,
         'ForecastedRevenue': [np.nan] * forecast_horizon, # Renamed for consistency
@@ -352,8 +365,8 @@ def train_event_count_model(event_df, forecast_horizon=4, n_trials=50, n_bootstr
     forecast_df['ForecastedRevenue'] = main_model_preds # Using 'ForecastedRevenue' for consistency
 
     block_size = min(12, len(X)) if len(X) > 0 else 1
-    if len(X) > 0 and len(X) >= block_size:
-        boot_preds_ci = np.zeros((n_bootstraps, forecast_horizon))
+    if effective_n_bootstraps > 0 and len(X) > 0 and len(X) >= block_size:
+        boot_preds_ci = np.zeros((effective_n_bootstraps, forecast_horizon))
         blocks = []
         if len(X) >= block_size:
             for i in range(len(X) - block_size + 1):
@@ -363,7 +376,7 @@ def train_event_count_model(event_df, forecast_horizon=4, n_trials=50, n_bootstr
         
         if blocks:
             k_val = max(1, int(np.ceil(len(X)/block_size)))
-            for b in range(n_bootstraps):
+            for b in range(effective_n_bootstraps):
                 random.seed(b)
                 sampled_blocks = random.choices(blocks, k=k_val)
                 X_boot = pd.concat([block[0] for block in sampled_blocks]).reset_index(drop=True)
@@ -410,26 +423,28 @@ def train_event_count_model(event_df, forecast_horizon=4, n_trials=50, n_bootstr
     
     return forecast_df
 
-def train_catering_model(catering_df, forecast_horizon=4, n_trials=50, n_bootstraps=100):
+def train_catering_model(catering_df, forecast_horizon, forecast_mode="standard", n_trials=50, n_bootstraps=100):
     """
-    Train an XGBoost model for catering event count forecasting with Optuna hyperparameter optimization
-    and generate forecasts with confidence intervals using bootstrap.
+    Train an XGBoost model for catering event count forecasting.
+    Supports 'standard' (default XGB params, no CI) and 'advanced' (Optuna HPO, Bootstrap CI).
     
     Parameters:
     -----------
     catering_df : pandas.DataFrame
-        DataFrame with the following columns: 'Month', 'Event_Count', and feature columns
+        DataFrame with 'Month', 'Event_Count', and feature columns
     forecast_horizon : int
         Number of months to forecast ahead
-    n_trials : int
-        Number of trials for Optuna hyperparameter optimization
-    n_bootstraps : int
-        Number of bootstrap iterations for confidence interval
+    forecast_mode : str, optional
+        'standard' or 'advanced'. Defaults to 'standard'.
+    n_trials : int, optional
+        Number of Optuna trials if mode is 'advanced'. Defaults to 50.
+    n_bootstraps : int, optional
+        Number of bootstrap iterations if mode is 'advanced'. Defaults to 100.
     
     Returns:
     --------
     pandas.DataFrame
-        DataFrame with forecasted values and confidence intervals
+        DataFrame with forecasted values and confidence intervals (NaN for CI in 'standard' mode)
     """
     # Split data into features and target
     X = catering_df.drop(columns=['Month', 'Event_Count'])
@@ -454,59 +469,49 @@ def train_catering_model(catering_df, forecast_horizon=4, n_trials=50, n_bootstr
     X_train, X_test = X.iloc[:-n_test] if n_test > 0 else X, X.iloc[-n_test:] if n_test > 0 else pd.DataFrame()
     y_train, y_test = y.iloc[:-n_test] if n_test > 0 else y, y.iloc[-n_test:] if n_test > 0 else pd.Series()
     
-    # Define Optuna objective function
-    def objective(trial):
-        params = {
-            "n_estimators": trial.suggest_int("n_estimators", 50, 400),
-            "max_depth": trial.suggest_int("max_depth", 2, 7),
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
-            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
-            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
-            "gamma": trial.suggest_float("gamma", 0, 1),
-        }
+    best_params = {}
+    effective_n_bootstraps = 0
+
+    if forecast_mode == "standard":
+        best_params = DEFAULT_XGB_PARAMS_FOR_STANDARD_MODE.copy()
+        effective_n_bootstraps = 0
+    elif forecast_mode == "advanced":
+        def objective(trial):
+            params = {
+                "n_estimators": trial.suggest_int("n_estimators", 50, 400),
+                "max_depth": trial.suggest_int("max_depth", 2, 7),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+                "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+                "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+                "gamma": trial.suggest_float("gamma", 0, 1),
+            }
+            model = XGBRegressor(**params, objective="reg:squarederror", random_state=42)
+            if not X_train.empty and not y_train.empty:
+                model.fit(X_train, y_train)
+                if not X_test.empty and not y_test.empty:
+                    preds = model.predict(X_test)
+                    rmse = np.sqrt(mean_squared_error(y_test, preds))
+                    return rmse
+            return float('inf')
         
-        model = XGBRegressor(
-            **params,
-            objective="reg:squarederror",
-            random_state=42
-        )
-        if not X_train.empty and not y_train.empty:
-            model.fit(X_train, y_train)
-            if not X_test.empty and not y_test.empty:
-                preds = model.predict(X_test)
-                rmse = np.sqrt(mean_squared_error(y_test, preds))
-                return rmse
-        return float('inf')
-    
-    # Run Optuna optimization
-    study = optuna.create_study(direction="minimize")
-    actual_n_trials = n_trials if len(X_train) >= n_test + 1 and n_test > 0 else max(1, n_trials // 5)
-    study.optimize(objective, n_trials=actual_n_trials, show_progress_bar=False)
-    best_params = study.best_params
-    
-    # Train final model on full dataset
-    final_model = XGBRegressor(
-        **best_params,
-        objective="reg:squarederror",
-        random_state=42
-    )
+        study = optuna.create_study(direction="minimize")
+        actual_n_trials = n_trials if len(X_train) >= n_test + 1 and n_test > 0 else max(1, n_trials // 5)
+        study.optimize(objective, n_trials=actual_n_trials, show_progress_bar=False)
+        best_params = study.best_params
+        effective_n_bootstraps = n_bootstraps
+    else:
+        raise ValueError(f"Invalid forecast_mode: {forecast_mode}. Choose 'standard' or 'advanced'.")
+        
+    final_model = XGBRegressor(**best_params, objective="reg:squarederror", random_state=42)
     final_model.fit(X, y)
     
-    # Generate forecasts for future periods
     last_date = catering_df['Month'].max()
-    
-    # Get the timezone from the last date (if it exists)
     tz = last_date.tz
-    
-    # Create future months with the same timezone as the input data
     future_months = [last_date + pd.DateOffset(months=i+1) for i in range(forecast_horizon)]
-    
-    # Ensure consistent timezone
     if tz is not None:
         future_months = [date.tz_localize(tz) if date.tz is None else date for date in future_months]
     
-    # Create dataframe to store forecasts
     forecast_df = pd.DataFrame({
         'Month': future_months,
         'ForecastedRevenue': [np.nan] * forecast_horizon, # Renamed for consistency
@@ -551,8 +556,8 @@ def train_catering_model(catering_df, forecast_horizon=4, n_trials=50, n_bootstr
     forecast_df['ForecastedRevenue'] = main_model_preds # Using 'ForecastedRevenue' for consistency
 
     block_size = min(12, len(X)) if len(X) > 0 else 1
-    if len(X) > 0 and len(X) >= block_size:
-        boot_preds_ci = np.zeros((n_bootstraps, forecast_horizon))
+    if effective_n_bootstraps > 0 and len(X) > 0 and len(X) >= block_size:
+        boot_preds_ci = np.zeros((effective_n_bootstraps, forecast_horizon))
         blocks = []
         if len(X) >= block_size:
             for i in range(len(X) - block_size + 1):
@@ -562,7 +567,7 @@ def train_catering_model(catering_df, forecast_horizon=4, n_trials=50, n_bootstr
         
         if blocks:
             k_val = max(1, int(np.ceil(len(X)/block_size)))
-            for b in range(n_bootstraps):
+            for b in range(effective_n_bootstraps):
                 random.seed(b)
                 sampled_blocks = random.choices(blocks, k=k_val)
                 X_boot = pd.concat([block[0] for block in sampled_blocks]).reset_index(drop=True)
