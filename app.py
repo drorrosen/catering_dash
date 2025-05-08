@@ -20,7 +20,7 @@ if 'login_error' not in st.session_state:
 def authenticate(username, password):
     # Hardcoded credentials as specified
     valid_credentials = {
-        "Haroonqureshi@omnixm.com": "CateringTest",
+        "haroonqureshi@omnixm.com": "CateringTest",
         "dror.rosentraub@gmail.com": "CateringTest"
     }
     return username in valid_credentials and password == valid_credentials[username]
