@@ -306,12 +306,36 @@ else:
             try:
                 file_extension = uploaded_file_name.split('.')[-1].lower()
                 if file_extension == 'csv':
-                    df_loaded = pd.read_csv(io.BytesIO(uploaded_file_content))
+                    df_loaded = pd.read_csv(io.BytesIO(uploaded_file_content), encoding='latin1')
                 elif file_extension in ['xls', 'xlsx']:
-                    df_loaded = pd.read_excel(io.BytesIO(uploaded_file_content))
+                    df_loaded = pd.read_excel(io.BytesIO(uploaded_file_content), engine='openpyxl' if file_extension == 'xlsx' else None) # Add encoding if supported by pandas for excel, or handle differently.
+                    # For Excel, pandas read_excel doesn't directly take 'encoding' in the same way as read_csv.
+                    # The encoding is usually handled by the Excel engine (e.g., openpyxl, xlrd).
+                    # If specific encoding issues persist with Excel, it might require a different approach,
+                    # such as reading the file differently or ensuring the Excel file itself is saved with a compatible encoding.
+                    # For now, assuming the default engine handles common encodings.
+                    # If latin1 is strictly needed for .xls/.xlsx and causes issues, we might need to decode bytes before passing to read_excel.
+                    # However, directly adding encoding='latin1' to read_excel is not a standard parameter.
+                    # Let's reconsider this part if specific errors arise for Excel.
+                    # For now, let's assume common Excel encodings are handled or try to decode if it's a general byte stream.
+                    # A common pattern is to try decoding if it's bytes.
+                    try:
+                        # Attempt to read directly, most engines handle common encodings.
+                        df_loaded = pd.read_excel(io.BytesIO(uploaded_file_content))
+                    except UnicodeDecodeError:
+                        # If a UnicodeDecodeError occurs, try decoding with latin1 then reading
+                        try:
+                            decoded_content = uploaded_file_content.decode('latin1')
+                            df_loaded = pd.read_excel(io.StringIO(decoded_content)) # Use StringIO for decoded string
+                        except Exception as decode_err:
+                            st.sidebar.error(f"Error decoding Excel with latin1: {decode_err}")
+                            return None
+                    except Exception as e_excel: # Catch other excel reading errors
+                         st.sidebar.error(f"Error reading Excel file: {e_excel}")
+                         return None
+
                 else:
                     st.sidebar.error(f"Unsupported file type: .{file_extension}. Please upload CSV or Excel.")
-                    return None
             except Exception as e:
                 st.sidebar.error(f"Error reading uploaded file: {e}")
                 return None
@@ -955,94 +979,193 @@ Provided Catering Event Count Data (CSV):
         
         # Prepare the event details dataframe from current_filters (globally filtered data)
         event_details_base = current_filters.copy()
+        event_details_for_display = event_details_base.copy() # Start with a full copy, will be filtered by in-tab selections
 
-        # --- In-tab filter for Event Type (using Selectbox) ---
-        if not event_details_base.empty and 'EventType_Description' in event_details_base.columns:
-            unique_event_types_in_tab = ["All Event Types"] + sorted(event_details_base['EventType_Description'].unique())
-            selected_event_type_in_tab = st.selectbox(
-                "Filter by Event Type (within this tab):",
-                options=unique_event_types_in_tab,
-                index=0, # Default to "All Event Types"
-                key="event_type_filter_selectbox_tab3"
-            )
-            if selected_event_type_in_tab != "All Event Types":
-                event_details_for_display = event_details_base[event_details_base['EventType_Description'] == selected_event_type_in_tab].copy()
-            else:
-                event_details_for_display = event_details_base.copy() # Show all if "All Event Types" is selected
-        else:
-            event_details_for_display = event_details_base.copy()
+        # --- In-tab filters ---
+        st.markdown("##### Further Filter Event Details:")
         
+        # Row 1 of filters: Event Type (existing) and Planner
+        filter_row1_col1, filter_row1_col2 = st.columns(2)
+        with filter_row1_col1:
+            if not event_details_base.empty and 'EventType_Description' in event_details_base.columns:
+                unique_event_types_in_tab = ["All Event Types"] + sorted(event_details_base['EventType_Description'].unique())
+                selected_event_type_in_tab = st.selectbox(
+                    "Filter by Event Type:",
+                    options=unique_event_types_in_tab,
+                    index=0,
+                    key="event_type_filter_selectbox_tab3"
+                )
+                if selected_event_type_in_tab != "All Event Types":
+                    event_details_for_display = event_details_for_display[event_details_for_display['EventType_Description'] == selected_event_type_in_tab]
+            else:
+                st.selectbox("Filter by Event Type:", ["No Event Types available"], disabled=True)
+
+        with filter_row1_col2:
+            if not event_details_base.empty and 'UsageName' in event_details_base.columns:
+                unique_planners = ["All Planners"] + sorted(event_details_base['UsageName'].dropna().unique())
+                selected_planner = st.selectbox(
+                    "Filter by Planner:",
+                    options=unique_planners,
+                    index=0,
+                    key="planner_filter_selectbox_tab3"
+                )
+                if selected_planner != "All Planners":
+                    event_details_for_display = event_details_for_display[event_details_for_display['UsageName'] == selected_planner]
+            else:
+                st.selectbox("Filter by Planner:", ["No Planners available"], disabled=True)
+
+        # Row 2 of filters: Business Group and Space
+        filter_row2_col1, filter_row2_col2 = st.columns(2)
+        with filter_row2_col1:
+            if not event_details_base.empty and 'BusinessGroup_Description' in event_details_base.columns:
+                unique_biz_groups = ["All Business Groups"] + sorted(event_details_base['BusinessGroup_Description'].dropna().unique())
+                selected_biz_group = st.selectbox(
+                    "Filter by Business Group:",
+                    options=unique_biz_groups,
+                    index=0,
+                    key="biz_group_filter_selectbox_tab3"
+                )
+                if selected_biz_group != "All Business Groups":
+                    event_details_for_display = event_details_for_display[event_details_for_display['BusinessGroup_Description'] == selected_biz_group]
+            else:
+                st.selectbox("Filter by Business Group:", ["No Business Groups available"], disabled=True)
+
+        with filter_row2_col2:
+            if not event_details_base.empty and 'Space_Description' in event_details_base.columns:
+                unique_spaces = ["All Spaces"] + sorted(event_details_base['Space_Description'].dropna().unique())
+                selected_space = st.selectbox(
+                    "Filter by Space:",
+                    options=unique_spaces,
+                    index=0,
+                    key="space_filter_selectbox_tab3"
+                )
+                if selected_space != "All Spaces":
+                    event_details_for_display = event_details_for_display[event_details_for_display['Space_Description'] == selected_space]
+            else:
+                st.selectbox("Filter by Space:", ["No Spaces available"], disabled=True)
+        
+        # Row 3 of filters: Status and Category Type
+        filter_row3_col1, filter_row3_col2 = st.columns(2)
+        with filter_row3_col1:
+            if not event_details_base.empty and 'Status_Description' in event_details_base.columns:
+                unique_statuses = ["All Statuses"] + sorted(event_details_base['Status_Description'].dropna().unique())
+                selected_status = st.selectbox(
+                    "Filter by Status:",
+                    options=unique_statuses,
+                    index=0,
+                    key="status_filter_selectbox_tab3"
+                )
+                if selected_status != "All Statuses":
+                    event_details_for_display = event_details_for_display[event_details_for_display['Status_Description'] == selected_status]
+            else:
+                st.selectbox("Filter by Status:", ["No Statuses available"], disabled=True)
+
+        with filter_row3_col2:
+            if not event_details_base.empty and 'Category_Type' in event_details_base.columns:
+                unique_cat_types = ["All Category Types"] + sorted(event_details_base['Category_Type'].dropna().unique())
+                selected_cat_type = st.selectbox(
+                    "Filter by Category Type:",
+                    options=unique_cat_types,
+                    index=0,
+                    key="cat_type_filter_selectbox_tab3"
+                )
+                if selected_cat_type != "All Category Types":
+                    event_details_for_display = event_details_for_display[event_details_for_display['Category_Type'] == selected_cat_type]
+            else:
+                st.selectbox("Filter by Category Type:", ["No Category Types available"], disabled=True)
+        
+        st.markdown("---") # Visual separator before sort controls
+
         # --- Sorting controls for the displayed table ---
-        col_sort1, col_sort2 = st.columns([3, 1]) # Adjusted column widths for better spacing
+        col_sort1, col_sort2 = st.columns([3, 1])
+        
+        # Define the full intended column mapping first for sorting options
+        # This includes all columns we might want to display and sort by their friendly names
+        potential_column_mapping = {
+            'StartDate': 'Date',
+            'FunctionStart': 'Time',
+            'EndDate': 'End Date',
+            'FunctionEnd': 'End Time',
+            'EventID': 'Event ID',
+            'EventType_Description': 'Event Type',
+            'Event_Description': 'Event Name',
+            'Function_Description': 'Function Details',
+            'OrderedAttendance': 'Expected Attendance',
+            'UsageName': 'Planner',
+            'BusinessGroup_Description': 'Business Group',
+            'Space_Description': 'Space',
+            'Status_Description': 'Status',
+            'Category_Type': 'Category Type',
+            'Allocation': 'Allocation',
+            'ActualRevenue': 'Revenue',
+            'OrderedRevenue': 'Ordered Revenue',
+        }
+
         with col_sort1:
-            sort_by_options = ["Date", "Event Name", "Event Type", "Planner", "Revenue"]
-            # Filter sort_by options based on available columns after renaming
-            # This requires knowing the renamed columns first. Let's define a preliminary set of columns for sorting.
-            # We'll refine this after actual renaming to ensure robustness.
-            available_sort_options = []
-            temp_cols_for_sort_check = event_details_for_display.copy()
-            column_mapping_for_sort_check = {
-                'StartDate': 'Date',
-                'Event_Description': 'Event Name',
-                'EventType_Description': 'Event Type',
-                'UsageName': 'Planner',
-                'ActualRevenue': 'Revenue',
-            }
-            temp_cols_for_sort_check.rename(columns={k: v for k,v in column_mapping_for_sort_check.items() if k in temp_cols_for_sort_check.columns}, inplace=True)
-            for opt in sort_by_options:
-                if opt in temp_cols_for_sort_check.columns:
-                    available_sort_options.append(opt)
-            if not available_sort_options: available_sort_options = ["Date"] # Default if no common sortable columns
+            # Determine available sort options based on columns that will actually be in event_display_df
+            # and have a mapping
+            # We check against event_details_for_display.columns (original names) that are in potential_column_mapping.keys()
+            # and then use their mapped names.
             
-            sort_by = st.selectbox("Sort by", available_sort_options, index=0, key="sort_by_tab3")
+            # Define display columns *before* setting sort options
+            # These are the *original* column names we intend to show
+            display_columns_intended = [
+                'StartDate', 'FunctionStart', 'EndDate', 'FunctionEnd', 
+                'EventID', 'Event_Description', 'EventType_Description', 'Function_Description',
+                'UsageName', 'BusinessGroup_Description', 'Space_Description', 
+                'Status_Description', 'Category_Type', 'Allocation',
+                'OrderedAttendance', 'ActualRevenue', 'OrderedRevenue'
+            ]
+            # Filter to columns that actually exist in the (filtered) dataframe
+            actual_display_columns_original_names = [col for col in display_columns_intended if col in event_details_for_display.columns]
+            
+            # Get the friendly names for sorting options
+            sort_by_friendly_options = [potential_column_mapping[col] for col in actual_display_columns_original_names if col in potential_column_mapping]
+            if not sort_by_friendly_options: sort_by_friendly_options = ["Date"] # Default
+
+            sort_by = st.selectbox("Sort by", sort_by_friendly_options, index=0 if "Date" in sort_by_friendly_options else 0, key="sort_by_tab3")
+        
         with col_sort2:
             ascending = st.checkbox("Ascending order", value=True, key="ascending_tab3")
         
         # --- Create a clean dataframe for display with selected columns ---
         if not event_details_for_display.empty:
-            display_columns = ['StartDate', 'EventID', 'EventType_Description', 'Event_Description', 
-                              'OrderedAttendance', 'UsageName', 'BusinessGroup_Description',
-                              'ActualRevenue', 'OrderedRevenue', 'FunctionStart'] # Added FunctionStart for Time
+            # Use actual_display_columns_original_names which are guaranteed to exist
+            event_display_df = event_details_for_display[actual_display_columns_original_names].copy()
             
-            # Filter columns that exist in the dataframe
-            display_columns = [col for col in display_columns if col in event_details_for_display.columns]
-            
-            event_display_df = event_details_for_display[display_columns].copy()
-            
-            # Rename columns for better readability
-            column_mapping = {
-                'StartDate': 'Date',
-                'EventID': 'Event ID',
-                'EventType_Description': 'Event Type',
-                'Event_Description': 'Event Name',
-                'OrderedAttendance': 'Expected Attendance',
-                'UsageName': 'Planner',
-                'BusinessGroup_Description': 'Business Group',
-                'ActualRevenue': 'Revenue',
-                'OrderedRevenue': 'Ordered Revenue',
-                'FunctionStart': 'Time' # To be formatted
-            }
-            
-            rename_dict = {k: v for k, v in column_mapping.items() if k in event_display_df.columns}
-            event_display_df.rename(columns=rename_dict, inplace=True)
+            # Rename columns for better readability using the potential_column_mapping
+            # Only rename columns that are present in event_display_df and have a mapping
+            rename_dict_final = {k: v for k, v in potential_column_mapping.items() if k in event_display_df.columns}
+            event_display_df.rename(columns=rename_dict_final, inplace=True)
             
             # Format date and time columns
-            if 'Date' in event_display_df.columns:
+            if 'Date' in event_display_df.columns: # Corresponds to StartDate
                 event_display_df['Date'] = pd.to_datetime(event_display_df['Date']).dt.strftime('%a, %b %d, %Y')
+            if 'End Date' in event_display_df.columns: # Corresponds to EndDate
+                event_display_df['End Date'] = pd.to_datetime(event_display_df['End Date']).dt.strftime('%a, %b %d, %Y')
             
-            if 'Time' in event_display_df.columns: # Was FunctionStart
+            if 'Time' in event_display_df.columns: # Corresponds to FunctionStart
                 event_display_df['Time'] = pd.to_datetime(event_display_df['Time']).dt.strftime('%I:%M %p')
-                # Reorder columns to put Time after Date if Date exists
-                if 'Date' in event_display_df.columns:
-                    cols = event_display_df.columns.tolist()
-                    try:
-                        date_idx = cols.index('Date')
-                        time_idx = cols.index('Time')
-                        if time_idx != date_idx + 1:
-                            cols.insert(date_idx + 1, cols.pop(time_idx))
-                            event_display_df = event_display_df[cols]
-                    except ValueError: # If Date or Time column was unexpectedly removed/renamed
-                        pass 
+            if 'End Time' in event_display_df.columns: # Corresponds to FunctionEnd
+                event_display_df['End Time'] = pd.to_datetime(event_display_df['End Time']).dt.strftime('%I:%M %p')
+
+            # Reorder columns to group date/time pairs
+            final_columns_ordered = []
+            current_cols_set = set(event_display_df.columns)
+            
+            # Define preferred order, checking existence
+            preferred_order = [
+                'Date', 'Time', 'End Date', 'End Time', 'Event ID', 'Event Name', 'Event Type', 
+                'Function Details', 'Planner', 'Business Group', 'Space', 'Status', 
+                'Category Type', 'Allocation', 'Expected Attendance', 'Revenue', 'Ordered Revenue'
+            ]
+            for col_name in preferred_order:
+                if col_name in current_cols_set:
+                    final_columns_ordered.append(col_name)
+                    current_cols_set.remove(col_name)
+            final_columns_ordered.extend(sorted(list(current_cols_set))) # Add any remaining columns, sorted
+            
+            event_display_df = event_display_df[final_columns_ordered]
 
             # Format revenue columns 
             if 'Revenue' in event_display_df.columns:
@@ -1051,58 +1174,34 @@ Provided Catering Event Count Data (CSV):
                 event_display_df['Ordered Revenue'] = event_display_df['Ordered Revenue'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
             
             # --- Sort the dataframe based on user selection ---
-            # The sort_by options use the *renamed* column names.
-            if sort_by == "Date":
-                original_date_col_name = next((k for k, v in column_mapping.items() if v == "Date"), None)
-                if original_date_col_name and original_date_col_name in event_details_for_display.columns:
-                    # Sort the base dataframe first by the original date column
-                    event_details_for_display = event_details_for_display.sort_values(by=original_date_col_name, ascending=ascending)
-                    # Now, event_display_df will be created from this already sorted dataframe below
-                    # No separate .iloc re-indexing needed for date sort here.
-            
-            # --- Create a clean dataframe for display with selected columns ---
-            # This section will now use event_details_for_display which is potentially sorted by date already
-            display_columns = ['StartDate', 'EventID', 'EventType_Description', 'Event_Description', 
-                              'OrderedAttendance', 'UsageName', 'BusinessGroup_Description',
-                              'ActualRevenue', 'OrderedRevenue', 'FunctionStart']
-            
-            display_columns = [col for col in display_columns if col in event_details_for_display.columns]
-            event_display_df = event_details_for_display[display_columns].copy()
-            
-            rename_dict = {k: v for k, v in column_mapping.items() if k in event_display_df.columns}
-            event_display_df.rename(columns=rename_dict, inplace=True)
-            
-            # Format date and time columns (MUST be done AFTER renaming StartDate to Date and FunctionStart to Time)
-            if 'Date' in event_display_df.columns:
-                # The 'Date' column in event_display_df now corresponds to original 'StartDate' from event_details_for_display
-                # which was already converted to datetime. We just format it.
-                event_display_df['Date'] = pd.to_datetime(event_display_df['Date']).dt.strftime('%a, %b %d, %Y')
-            
-            if 'Time' in event_display_df.columns:
-                event_display_df['Time'] = pd.to_datetime(event_display_df['Time']).dt.strftime('%I:%M %p')
-                if 'Date' in event_display_df.columns:
-                    cols = event_display_df.columns.tolist()
-                    try:
-                        date_idx = cols.index('Date')
-                        time_idx = cols.index('Time')
-                        if time_idx != date_idx + 1:
-                            cols.insert(date_idx + 1, cols.pop(time_idx))
-                            event_display_df = event_display_df[cols]
-                    except ValueError: pass 
+            # Map friendly sort_by name back to an original name if necessary for sorting logic that uses original values (e.g. actual date objects)
+            # However, for most cases, sorting on the formatted event_display_df is fine.
+            # For 'Date' or 'End Date', it's better to sort on the original unformatted datetime objects if strict chronological order is key
+            # The current implementation sorts 'Date' (StartDate) on event_details_for_display which is good.
+            # Let's adjust to handle if the user selects 'End Date' for sorting.
 
-            if 'Revenue' in event_display_df.columns:
-                event_display_df['Revenue'] = event_display_df['Revenue'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
-            if 'Ordered Revenue' in event_display_df.columns:
-                event_display_df['Ordered Revenue'] = event_display_df['Ordered Revenue'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
-            
-            # --- Apply non-Date sorting if selected ---
-            if sort_by != "Date" and sort_by in event_display_df.columns:
-                sort_col_actual = sort_by
-                if sort_col_actual == "Revenue" or sort_col_actual == "Ordered Revenue":
-                    temp_sort_series = pd.to_numeric(event_display_df[sort_col_actual].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False), errors='coerce')
+            sort_col_original_for_date_types = None
+            if sort_by == "Date": # Mapped from StartDate
+                 sort_col_original_for_date_types = 'StartDate'
+            elif sort_by == "End Date": # Mapped from EndDate
+                 sort_col_original_for_date_types = 'EndDate'
+
+            if sort_col_original_for_date_types and sort_col_original_for_date_types in event_details_for_display.columns:
+                # Sort the source dataframe by the original date column
+                # then rebuild event_display_df from this sorted source.
+                # This ensures correct chronological sorting before formatting.
+                sorted_indices = event_details_for_display[sort_col_original_for_date_types].sort_values(ascending=ascending).index
+                event_display_df = event_display_df.loc[sorted_indices]
+            elif sort_by in event_display_df.columns: # For non-date or already formatted date sort
+                # Handle numeric sorting for revenue columns correctly
+                if sort_by == "Revenue" or sort_by == "Ordered Revenue":
+                    temp_sort_series = pd.to_numeric(event_display_df[sort_by].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False), errors='coerce')
                     event_display_df = event_display_df.iloc[temp_sort_series.sort_values(ascending=ascending).index]
-                else:
-                    event_display_df = event_display_df.sort_values(by=sort_col_actual, ascending=ascending)
+                elif sort_by == "Expected Attendance": # Ensure numeric sort
+                     temp_sort_series = pd.to_numeric(event_display_df[sort_by], errors='coerce')
+                     event_display_df = event_display_df.iloc[temp_sort_series.sort_values(ascending=ascending).index]
+                else: # Default sort for other columns
+                    event_display_df = event_display_df.sort_values(by=sort_by, ascending=ascending, na_position='last')
             
             # Display the dataframe
             st.dataframe(event_display_df, use_container_width=True, hide_index=True)
@@ -1111,69 +1210,69 @@ Provided Catering Event Count Data (CSV):
             st.info("No events match the current filter criteria. Please adjust your filters in the sidebar or the Event Type filter on this tab.")
 
         # --- Chatbot Section for Event Details ---
-        # st.markdown("--- ") # Visual separator
-        # st.subheader("💬 Chat with Displayed Event Data")
+        st.markdown("---")
+        st.subheader("💬 Chat with Event Details")
 
-        # if "event_detail_messages" not in st.session_state:
-        # st.session_state.event_detail_messages = []
+        if "event_detail_messages" not in st.session_state:
+            st.session_state.event_detail_messages = []
 
-        # # Display existing messages
-        # for message in st.session_state.event_detail_messages:
-        # with st.chat_message(message["role"]):
-        # st.markdown(message["content"])
+        # Display existing messages
+        for message in st.session_state.event_detail_messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
 
-        # # Chat input
-        # if prompt := st.chat_input("Ask about the event data shown above..."):
-        # # Check for API key
-        # if not st.session_state.openai_api_key:
-        # st.error("Please enter your OpenAI API Key in the sidebar to use the chatbot.")
-        # elif event_details_for_display.empty:
-        # st.warning("There is no data currently displayed in the table to chat about. Please adjust filters.")
-        # else:
-        # # Add user message to chat history
-        # st.session_state.event_detail_messages.append({"role": "user", "content": prompt})
-        # # Display user message
-        # with st.chat_message("user"):
-        # st.markdown(prompt)
+        # Chat input
+        if prompt := st.chat_input("Ask about the event data shown above..."):
+            # Check for API key
+            if not st.session_state.openai_api_key:
+                st.error("Please enter your OpenAI API Key in the sidebar to use the chatbot.")
+            elif event_details_for_display.empty:
+                st.warning("There is no data currently displayed in the table to chat about. Please adjust filters.")
+            else:
+                # Add user message to chat history
+                st.session_state.event_detail_messages.append({"role": "user", "content": prompt})
+                # Display user message
+                with st.chat_message("user"):
+                    st.markdown(prompt)
 
-        # # Prepare data for LLM
-        # # Use the dataframe that is currently displayed in the table (already filtered)
-        # data_for_llm = event_display_df.to_csv(index=False)
+                with st.spinner("Preparing data and thinking..."):
+                    # Prepare data for LLM
+                    # Use the dataframe that is currently displayed in the table (already filtered)
+                    data_for_llm = event_display_df.to_csv(index=False)
 
-        # system_prompt_chat = f"""You are an AI assistant specialized in analyzing event data. 
-        # The user has provided a table of event details (in CSV format below) that has already been filtered based on their selections. 
-        # Your task is to answer questions based ONLY on this provided data. 
-        # Be concise and directly address the user's question using the data. 
-        # If the data does not contain the answer, explicitly state that. 
-        # Do not make assumptions or use external knowledge.
-        # Today's date is {datetime.now().strftime('%Y-%m-%d')}. Consider this if asked about past/future/current events relative to today.
-        # Provided Event Data (CSV):
-        # {data_for_llm}
-        # """
-                
-        # messages_for_api = [
-        # {"role": "system", "content": system_prompt_chat},
-        # # Include recent chat history for context, if any
-        # # For simplicity, let's just send the current prompt for now, but history could be added here.
-        # {"role": "user", "content": prompt}
-        # ]
+                    system_prompt_chat = f"""You are an AI assistant specialized in analyzing event data. 
+The user has provided a table of event details (in CSV format below) that has already been filtered based on their selections. 
+Your task is to answer questions based ONLY on this provided data. 
+Be concise and directly address the user's question using the data. 
+If the data does not contain the answer, explicitly state that. 
+Do not make assumptions or use external knowledge.
+Today's date is {datetime.now().strftime('%Y-%m-%d')}. Consider this if asked about past/future/current events relative to today.
+Provided Event Data (CSV):
+{data_for_llm}
+"""
+                    messages_for_api = [
+                        {"role": "system", "content": system_prompt_chat},
+                        # Include recent chat history for context, if any
+                        # For simplicity, let's just send the current prompt for now, but history could be added here.
+                        {"role": "user", "content": prompt}
+                    ]
 
-        # try:
-        # client = OpenAI(api_key=st.session_state.openai_api_key)
-        # with st.chat_message("assistant"):
-        # with st.spinner("Thinking..."):
-        # response = client.chat.completions.create(
-        # model=st.session_state.chatbot_model,
-        # messages=messages_for_api,
-        # temperature=0.5, # Adjust for creativity vs. factuality
-        # )
-        # ai_response = response.choices[0].message.content
-        # st.markdown(ai_response)
-        # st.session_state.event_detail_messages.append({"role": "assistant", "content": ai_response})
-        # except Exception as e:
-        # st.error(f"Error communicating with OpenAI: {e}")
-        # # Optionally remove the last user message if the API call failed severely
-        # # st.session_state.event_detail_messages.pop()
+                    try:
+                        client = OpenAI(api_key=st.session_state.openai_api_key)
+                        with st.chat_message("assistant"):
+                            with st.spinner("Thinking..."):
+                                response = client.chat.completions.create(
+                                    model=st.session_state.chatbot_model,
+                                    messages=messages_for_api,
+                                    temperature=0.5, # Adjust for creativity vs. factuality
+                                )
+                            ai_response = response.choices[0].message.content
+                            st.markdown(ai_response)
+                            st.session_state.event_detail_messages.append({"role": "assistant", "content": ai_response})
+                    except Exception as e:
+                        st.error(f"Error communicating with OpenAI: {e}")
+                        # Optionally remove the last user message if the API call failed severely
+                        # st.session_state.event_detail_messages.pop()
 
     # --- ATTENDEE DASHBOARD TAB ---
     with tab_attendee_dashboard:
