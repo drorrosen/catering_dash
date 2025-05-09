@@ -1001,8 +1001,8 @@ Provided Catering Event Count Data (CSV):
                 st.selectbox("Filter by Event Type:", ["No Event Types available"], disabled=True)
 
         with filter_row1_col2:
-            if not event_details_base.empty and 'UsageName' in event_details_base.columns:
-                unique_planners = ["All Planners"] + sorted(event_details_base['UsageName'].dropna().unique())
+            if not event_details_base.empty and 'PlannerName_Masked' in event_details_base.columns:
+                unique_planners = ["All Planners"] + sorted(event_details_base['PlannerName_Masked'].dropna().unique())
                 selected_planner = st.selectbox(
                     "Filter by Planner:",
                     options=unique_planners,
@@ -1010,7 +1010,7 @@ Provided Catering Event Count Data (CSV):
                     key="planner_filter_selectbox_tab3"
                 )
                 if selected_planner != "All Planners":
-                    event_details_for_display = event_details_for_display[event_details_for_display['UsageName'] == selected_planner]
+                    event_details_for_display = event_details_for_display[event_details_for_display['PlannerName_Masked'] == selected_planner]
             else:
                 st.selectbox("Filter by Planner:", ["No Planners available"], disabled=True)
 
@@ -1091,7 +1091,7 @@ Provided Catering Event Count Data (CSV):
             'Event_Description': 'Event Name',
             'Function_Description': 'Function Details',
             'OrderedAttendance': 'Expected Attendance',
-            'UsageName': 'Planner',
+            'PlannerName_Masked': 'Planner',
             'BusinessGroup_Description': 'Business Group',
             'Space_Description': 'Space',
             'Status_Description': 'Status',
@@ -1112,7 +1112,7 @@ Provided Catering Event Count Data (CSV):
             display_columns_intended = [
                 'StartDate', 'FunctionStart', 'EndDate', 'FunctionEnd', 
                 'EventID', 'Event_Description', 'EventType_Description', 'Function_Description',
-                'UsageName', 'BusinessGroup_Description', 'Space_Description', 
+                'PlannerName_Masked', 'BusinessGroup_Description', 'Space_Description',
                 'Status_Description', 'Category_Type', 'Allocation',
                 'OrderedAttendance', 'ActualRevenue', 'OrderedRevenue'
             ]
@@ -1156,7 +1156,7 @@ Provided Catering Event Count Data (CSV):
             # Define preferred order, checking existence
             preferred_order = [
                 'Date', 'Time', 'End Date', 'End Time', 'Event ID', 'Event Name', 'Event Type', 
-                'Function Details', 'Planner', 'Business Group', 'Space', 'Status', 
+                'Function Details', 'Planner', 'Business Group', 'Space', 'Status',
                 'Category Type', 'Allocation', 'Expected Attendance', 'Revenue', 'Ordered Revenue'
             ]
             for col_name in preferred_order:
