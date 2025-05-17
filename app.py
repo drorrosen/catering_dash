@@ -1751,7 +1751,8 @@ Provided Business Group Impact Analysis Data (CSV):
                     st.metric(label=f"Events on Rainy Days", value=f"{events_by_simple_weather.get('Rainy', 0)}")
                     st.metric(label=f"Events on Snowy Days", value=f"{events_by_simple_weather.get('Snowy', 0)}")
             else:
-                st.warning("Required columns for weather KPIs (ActualRevenue, EventID, simple_weather) not found.")
+                #st.warning("Required columns for weather KPIs (ActualRevenue, EventID, simple_weather) not found.")
+                pass
 
             st.markdown("<br>", unsafe_allow_html=True)
             st.markdown("### Event & Revenue Analysis by Detailed Weather Conditions")
