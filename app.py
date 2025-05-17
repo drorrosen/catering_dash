@@ -6,6 +6,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from models import train_revenue_model, train_event_count_model, train_catering_model
 from utils import load_data, preprocess_data, create_features
+from weather_utils import get_weather_data # Import the new weather function
 from datetime import datetime, timedelta
 from openai import OpenAI # Import OpenAI library
 import io # Needed for handling file bytes
@@ -498,14 +499,73 @@ else:
         # Fallback if essential columns are missing, though app should stop earlier if df_processed_data_global is bad
         df_event_max_attendance = df_event_level_kpi.copy() # Will use first attendance if max cannot be calculated
 
+    # --- Fetch and Merge Weather Data ---
+    @st.cache_data
+    def load_and_merge_weather_data(processed_data_df):
+        if processed_data_df is None or processed_data_df.empty:
+            st.warning("Main data is not available, cannot fetch weather data for merging.")
+            return pd.DataFrame() 
+
+        start_date_param = processed_data_df['StartDate'].min().date()
+        end_date_param = processed_data_df['StartDate'].max().date()
+        today = datetime.now().date()
+
+        # Cap end_date_param at today
+        actual_end_date = min(end_date_param, today)
+        
+        # Ensure start_date_param is not after actual_end_date
+        actual_start_date = min(start_date_param, actual_end_date)
+
+        # st.info(f"[Merge] Weather data request range: {actual_start_date} to {actual_end_date}") # Removed this line
+        weather_df = get_weather_data(actual_start_date, actual_end_date)
+        
+        if weather_df.empty:
+            st.warning("Could not retrieve weather data.")
+            return processed_data_df # Return original data if weather data fails
+
+        # Prepare main data for merge: ensure StartDate is just a date object
+        processed_data_df_copy = processed_data_df.copy()
+        processed_data_df_copy['merge_date'] = pd.to_datetime(processed_data_df_copy['StartDate']).dt.date
+        
+        # Merge weather data
+        # The weather_df 'date' column is already datetime.date objects from the updated weather_utils.py
+        merged_df = pd.merge(processed_data_df_copy, weather_df, left_on='merge_date', right_on='date', how='left')
+        merged_df.drop(columns=['merge_date', 'date'], inplace=True, errors='ignore') # Clean up merge keys
+        
+        return merged_df
+
+    # Load and merge weather data with the globally filtered data for initial display and general use
+    df_merged_with_weather = load_and_merge_weather_data(current_filters.copy()) # Use a copy of current_filters
+
+    # WMO Weather code descriptions (simplified)
+    weather_code_descriptions = {
+        0: 'Clear sky',
+        1: 'Mainly clear', 2: 'Partly cloudy', 3: 'Overcast',
+        45: 'Fog', 48: 'Depositing rime fog',
+        51: 'Light drizzle', 53: 'Moderate drizzle', 55: 'Dense drizzle',
+        56: 'Light freezing drizzle', 57: 'Dense freezing drizzle',
+        61: 'Slight rain', 63: 'Moderate rain', 65: 'Heavy rain',
+        66: 'Light freezing rain', 67: 'Heavy freezing rain',
+        71: 'Slight snow fall', 73: 'Moderate snow fall', 75: 'Heavy snow fall',
+        77: 'Snow grains',
+        80: 'Slight rain showers', 81: 'Moderate rain showers', 82: 'Violent rain showers',
+        85: 'Slight snow showers', 86: 'Heavy snow showers',
+        95: 'Thunderstorm', # Slight or moderate
+        96: 'Thunderstorm with slight hail', 99: 'Thunderstorm with heavy hail'
+    }
+
+    if not df_merged_with_weather.empty and 'weathercode' in df_merged_with_weather.columns:
+        df_merged_with_weather['weather_condition'] = df_merged_with_weather['weathercode'].map(weather_code_descriptions).fillna('Unknown')
+
     # Create main application tabs for navigation
-    tab_event_dashboard, tab_event_details, tab_attendee_dashboard, tab_revenue_dashboard, tab_advanced_analytics, tab_forecasting = st.tabs([
+    tab_event_dashboard, tab_event_details, tab_attendee_dashboard, tab_revenue_dashboard, tab_advanced_analytics, tab_forecasting, tab_weather_impact = st.tabs([
         "📊 Event Dashboard", 
         "📋 Event Details", 
         "👥 Attendee Dashboard", 
         "💰 Revenue Dashboard", 
         "🔬 Advanced Analytics", 
-        "📈 Forecasting"
+        "📈 Forecasting",
+        "🌍 Weather Impact Analysis"
     ])
 
     # --- DASHBOARD TAB ---
@@ -1644,3 +1704,206 @@ Provided Business Group Impact Analysis Data (CSV):
                             st.error(f"Error communicating with OpenAI: {e}")
                             if st.session_state.advanced_analytics_messages and st.session_state.advanced_analytics_messages[-1]["role"] == "user":
                                  st.session_state.advanced_analytics_messages.pop()
+
+    # --- WEATHER IMPACT ANALYSIS TAB ---
+    with tab_weather_impact:
+        st.markdown('<div class="tab-page-title">Weather Impact Analysis</div>', unsafe_allow_html=True)
+
+        if df_merged_with_weather.empty or 'weather_condition' not in df_merged_with_weather.columns:
+            st.warning("No merged weather and event data available. Please ensure data is loaded and filters are applied, and weather data could be fetched for the data's date range.")
+        else:
+            analysis_df = df_merged_with_weather.copy()
+            event_level_for_impact = analysis_df.drop_duplicates(subset='EventID', keep='first').copy()
+
+            # Add new weather KPIs section
+            st.markdown("### Weather Metrics Overview")
+            
+            # Calculate average weather metrics
+            avg_max_temp = analysis_df['temperature_2m_max'].mean() if 'temperature_2m_max' in analysis_df.columns else 0
+            avg_precip = analysis_df['precipitation_sum'].mean() if 'precipitation_sum' in analysis_df.columns else 0
+            avg_max_wind = analysis_df['windspeed_10m_max'].mean() if 'windspeed_10m_max' in analysis_df.columns else 0
+            avg_daylight = analysis_df['daylight_time'].mean() if 'daylight_time' in analysis_df.columns else 0
+            
+            # Display weather KPIs in columns using the same styling as other tabs
+            weather_kpi_col1, weather_kpi_col2, weather_kpi_col3, weather_kpi_col4 = st.columns(4)
+            with weather_kpi_col1:
+                st.markdown(f'''<div class="metric-card"><p>AVG MAX TEMPERATURE</p><h2>{avg_max_temp:.1f}°C</h2></div>''', unsafe_allow_html=True)
+            with weather_kpi_col2:
+                st.markdown(f'''<div class="metric-card"><p>AVG DAILY PRECIPITATION</p><h2>{avg_precip:.2f}mm</h2></div>''', unsafe_allow_html=True)
+            with weather_kpi_col3:
+                st.markdown(f'''<div class="metric-card"><p>AVG MAX WIND SPEED</p><h2>{avg_max_wind:.1f}km/h</h2></div>''', unsafe_allow_html=True)
+            with weather_kpi_col4:
+                st.markdown(f'''<div class="metric-card"><p>AVG DAYLIGHT HOURS</p><h2>{avg_daylight:.1f}h</h2></div>''', unsafe_allow_html=True)
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            st.markdown("### Key Performance Indicators: Event Metrics by Weather")
+            if 'ActualRevenue' in event_level_for_impact.columns and 'EventID' in event_level_for_impact.columns and 'simple_weather' in event_level_for_impact.columns:
+                revenue_by_simple_weather = event_level_for_impact.groupby('simple_weather')['ActualRevenue'].sum().sort_values(ascending=False)
+                events_by_simple_weather = event_level_for_impact.groupby('simple_weather')['EventID'].nunique().sort_values(ascending=False)
+                kpi_weather_col1, kpi_weather_col2 = st.columns(2)
+                with kpi_weather_col1:
+                    st.metric(label=f"Total Revenue on Clear/Mainly Clear Days", value=f"${revenue_by_simple_weather.get('Clear/Mainly Clear', 0):,.0f}")
+                    st.metric(label=f"Total Revenue on Rainy Days", value=f"${revenue_by_simple_weather.get('Rainy', 0):,.0f}")
+                    st.metric(label=f"Total Revenue on Snowy Days", value=f"${revenue_by_simple_weather.get('Snowy', 0):,.0f}")
+                with kpi_weather_col2:
+                    st.metric(label=f"Events on Clear/Mainly Clear Days", value=f"{events_by_simple_weather.get('Clear/Mainly Clear', 0)}")
+                    st.metric(label=f"Events on Rainy Days", value=f"{events_by_simple_weather.get('Rainy', 0)}")
+                    st.metric(label=f"Events on Snowy Days", value=f"{events_by_simple_weather.get('Snowy', 0)}")
+            else:
+                st.warning("Required columns for weather KPIs (ActualRevenue, EventID, simple_weather) not found.")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("### Event & Revenue Analysis by Detailed Weather Conditions")
+            viz_col1, viz_col2 = st.columns(2)
+            with viz_col1:
+                if 'EventID' in event_level_for_impact.columns and 'weather_condition' in event_level_for_impact.columns:
+                    event_count_by_cond = event_level_for_impact.groupby('weather_condition')['EventID'].nunique().reset_index(name='EventCount').sort_values(by='EventCount', ascending=False)
+                    fig_event_count_weather = px.bar(event_count_by_cond.head(10), y='weather_condition', x='EventCount', orientation='h', title='Event Count by Weather (Top 10)', labels={'EventCount': 'Number of Events', 'weather_condition': 'Weather'}, text='EventCount')
+                    fig_event_count_weather.update_traces(marker_color='#6495ED', texttemplate='%{text}', textposition='outside')
+                    fig_event_count_weather.update_layout(height=400, yaxis_title=None, plot_bgcolor='white', margin=dict(l=10, r=10, t=30, b=20), yaxis=dict(autorange="reversed"))
+                    st.plotly_chart(fig_event_count_weather, use_container_width=True, key="weather_impact_event_count_chart_v2")
+                else: st.info("Data missing for 'Event Count by Weather' chart.")
+            with viz_col2:
+                if 'ActualRevenue' in event_level_for_impact.columns and 'weather_condition' in event_level_for_impact.columns:
+                    avg_revenue_by_cond = event_level_for_impact.groupby('weather_condition')['ActualRevenue'].mean().reset_index().sort_values(by='ActualRevenue', ascending=False)
+                    fig_avg_rev_weather = px.bar(avg_revenue_by_cond.head(10), y='weather_condition', x='ActualRevenue', orientation='h', title='Avg. Event Revenue by Weather (Top 10)', labels={'ActualRevenue': 'Avg. Revenue ($)', 'weather_condition': 'Weather'}, text='ActualRevenue')
+                    fig_avg_rev_weather.update_traces(marker_color='#FF7F50', texttemplate='$%{text:,.0f}', textposition='outside')
+                    fig_avg_rev_weather.update_layout(height=400, yaxis_title=None, plot_bgcolor='white', margin=dict(l=10, r=10, t=30, b=20), yaxis=dict(autorange="reversed"))
+                    st.plotly_chart(fig_avg_rev_weather, use_container_width=True, key="weather_impact_avg_rev_chart_v2")
+                else: st.info("Data missing for 'Avg. Event Revenue by Weather' chart.")
+
+            st.markdown("<hr style='margin-top: 20px; margin-bottom: 20px;'>", unsafe_allow_html=True)
+            st.markdown("### Analysis by Weather Variable Categories")
+
+            # Prepare data for daily metrics to be binned
+            analysis_df['event_date'] = pd.to_datetime(analysis_df['StartDate']).dt.date
+            daily_event_metrics_for_binning = analysis_df.groupby('event_date').agg(
+                TotalDailyRevenue=('ActualRevenue', 'sum'),
+                TotalDailyEvents=('EventID', 'nunique')
+            ).reset_index()
+            daily_weather_vars_for_binning = analysis_df[['event_date', 'temperature_2m_max', 'precipitation_sum', 'windspeed_10m_max', 'daylight_time']].drop_duplicates(subset=['event_date'], keep='first')
+            binned_analysis_df = pd.merge(daily_event_metrics_for_binning, daily_weather_vars_for_binning, on='event_date', how='left')
+            binned_analysis_df.dropna(subset=['temperature_2m_max', 'windspeed_10m_max', 'daylight_time', 'precipitation_sum'], inplace=True) # Ensure no NaN for binning columns
+
+            if not binned_analysis_df.empty:
+                # Temperature Bins
+                temp_bins = [-np.inf, 0, 10, 20, 30, np.inf]
+                temp_labels = ['<0°C', '0-10°C', '10-20°C', '20-30°C', '>30°C']
+                binned_analysis_df['temp_bin'] = pd.cut(binned_analysis_df['temperature_2m_max'], bins=temp_bins, labels=temp_labels, right=False)
+                
+                # Wind Speed Bins
+                wind_bins = [0, 15, 30, 45, np.inf] # km/h example bins
+                wind_labels = ['Light (0-15)', 'Moderate (15-30)', 'Strong (30-45)', 'Very Strong (>45)']
+                binned_analysis_df['wind_bin'] = pd.cut(binned_analysis_df['windspeed_10m_max'], bins=wind_bins, labels=wind_labels, right=False)
+
+                # Daylight Hours Bins
+                daylight_bins = [0, 9, 12, 15, np.inf] # hours example bins
+                daylight_labels = ['<9h', '9-12h', '12-15h', '>15h']
+                binned_analysis_df['daylight_bin'] = pd.cut(binned_analysis_df['daylight_time'], bins=daylight_bins, labels=daylight_labels, right=False)
+                
+                # Precipitation Bins
+                precip_bins = [-np.inf, 0.1, 2.5, 10, np.inf] # mm, 0 for no rain, then light, moderate, heavy
+                precip_labels = ['No Precip', 'Light (0.1-2.5mm)', 'Moderate (2.5-10mm)', 'Heavy (>10mm)']
+                binned_analysis_df['precip_bin'] = pd.cut(binned_analysis_df['precipitation_sum'], bins=precip_bins, labels=precip_labels, right=True, include_lowest=True)
+
+                # --- Plotting binned data ---
+                st.subheader("Daily Event Metrics by Temperature Range")
+                corr_temp_events = binned_analysis_df['temperature_2m_max'].corr(binned_analysis_df['TotalDailyEvents'])
+                corr_temp_revenue = binned_analysis_df['temperature_2m_max'].corr(binned_analysis_df['TotalDailyRevenue'])
+                bin_col1, bin_col2 = st.columns(2)
+                with bin_col1:
+                    avg_events_by_temp = binned_analysis_df.groupby('temp_bin', observed=False)['TotalDailyEvents'].mean().reset_index()
+                    fig_events_temp_bin = px.bar(avg_events_by_temp, x='temp_bin', y='TotalDailyEvents', title=f'Avg Daily Events by Temp (Corr: {corr_temp_events:.2f})', labels={'temp_bin': 'Temperature Range', 'TotalDailyEvents': 'Avg Daily Events'}, color='temp_bin')
+                    st.plotly_chart(fig_events_temp_bin, use_container_width=True, key="events_temp_bin_chart")
+                with bin_col2:
+                    avg_revenue_by_temp = binned_analysis_df.groupby('temp_bin', observed=False)['TotalDailyRevenue'].mean().reset_index()
+                    fig_revenue_temp_bin = px.bar(avg_revenue_by_temp, x='temp_bin', y='TotalDailyRevenue', title=f'Avg Daily Revenue by Temp (Corr: {corr_temp_revenue:.2f})', labels={'temp_bin': 'Temperature Range', 'TotalDailyRevenue': 'Avg Daily Revenue ($'}, color='temp_bin')
+                    st.plotly_chart(fig_revenue_temp_bin, use_container_width=True, key="revenue_temp_bin_chart")
+
+                st.subheader("Daily Event Metrics by Wind Speed Range")
+                corr_wind_events = binned_analysis_df['windspeed_10m_max'].corr(binned_analysis_df['TotalDailyEvents'])
+                corr_wind_revenue = binned_analysis_df['windspeed_10m_max'].corr(binned_analysis_df['TotalDailyRevenue'])
+                bin_col3, bin_col4 = st.columns(2)
+                with bin_col3:
+                    avg_events_by_wind = binned_analysis_df.groupby('wind_bin', observed=False)['TotalDailyEvents'].mean().reset_index()
+                    fig_events_wind_bin = px.bar(avg_events_by_wind, x='wind_bin', y='TotalDailyEvents', title=f'Avg Daily Events by Wind (Corr: {corr_wind_events:.2f})', labels={'wind_bin': 'Wind Speed Range', 'TotalDailyEvents': 'Avg Daily Events'}, color='wind_bin')
+                    st.plotly_chart(fig_events_wind_bin, use_container_width=True, key="events_wind_bin_chart")
+                with bin_col4:
+                    avg_revenue_by_wind = binned_analysis_df.groupby('wind_bin', observed=False)['TotalDailyRevenue'].mean().reset_index()
+                    fig_revenue_wind_bin = px.bar(avg_revenue_by_wind, x='wind_bin', y='TotalDailyRevenue', title=f'Avg Daily Revenue by Wind (Corr: {corr_wind_revenue:.2f})', labels={'wind_bin': 'Wind Speed Range', 'TotalDailyRevenue': 'Avg Daily Revenue ($'}, color='wind_bin')
+                    st.plotly_chart(fig_revenue_wind_bin, use_container_width=True, key="revenue_wind_bin_chart")
+                
+                st.subheader("Daily Event Metrics by Precipitation Range")
+                corr_precip_events = binned_analysis_df['precipitation_sum'].corr(binned_analysis_df['TotalDailyEvents'])
+                corr_precip_revenue = binned_analysis_df['precipitation_sum'].corr(binned_analysis_df['TotalDailyRevenue'])
+                bin_col_precip1, bin_col_precip2 = st.columns(2)
+                with bin_col_precip1:
+                    avg_events_by_precip = binned_analysis_df.groupby('precip_bin', observed=False)['TotalDailyEvents'].mean().reset_index()
+                    fig_events_precip_bin = px.bar(avg_events_by_precip, x='precip_bin', y='TotalDailyEvents', title=f'Avg Daily Events by Precip. (Corr: {corr_precip_events:.2f})', labels={'precip_bin': 'Precipitation Range', 'TotalDailyEvents': 'Avg Daily Events'}, color='precip_bin')
+                    st.plotly_chart(fig_events_precip_bin, use_container_width=True, key="events_precip_bin_chart")
+                with bin_col_precip2:
+                    avg_revenue_by_precip = binned_analysis_df.groupby('precip_bin', observed=False)['TotalDailyRevenue'].mean().reset_index()
+                    fig_revenue_precip_bin = px.bar(avg_revenue_by_precip, x='precip_bin', y='TotalDailyRevenue', title=f'Avg Daily Revenue by Precip. (Corr: {corr_precip_revenue:.2f})', labels={'precip_bin': 'Precipitation Range', 'TotalDailyRevenue': 'Avg Daily Revenue ($'}, color='precip_bin')
+                    st.plotly_chart(fig_revenue_precip_bin, use_container_width=True, key="revenue_precip_bin_chart")
+
+                st.subheader("Daily Event Metrics by Daylight Hours")
+                corr_daylight_events = binned_analysis_df['daylight_time'].corr(binned_analysis_df['TotalDailyEvents'])
+                corr_daylight_revenue = binned_analysis_df['daylight_time'].corr(binned_analysis_df['TotalDailyRevenue'])
+                bin_col5, bin_col6 = st.columns(2)
+                with bin_col5:
+                    avg_events_by_daylight = binned_analysis_df.groupby('daylight_bin', observed=False)['TotalDailyEvents'].mean().reset_index()
+                    fig_events_daylight_bin = px.bar(avg_events_by_daylight, x='daylight_bin', y='TotalDailyEvents', title=f'Avg Daily Events by Daylight (Corr: {corr_daylight_events:.2f})', labels={'daylight_bin': 'Daylight Hours', 'TotalDailyEvents': 'Avg Daily Events'}, color='daylight_bin')
+                    st.plotly_chart(fig_events_daylight_bin, use_container_width=True, key="events_daylight_bin_chart")
+                with bin_col6:
+                    avg_revenue_by_daylight = binned_analysis_df.groupby('daylight_bin', observed=False)['TotalDailyRevenue'].mean().reset_index()
+                    fig_revenue_daylight_bin = px.bar(avg_revenue_by_daylight, x='daylight_bin', y='TotalDailyRevenue', title=f'Avg Daily Revenue by Daylight (Corr: {corr_daylight_revenue:.2f})', labels={'daylight_bin': 'Daylight Hours', 'TotalDailyRevenue': 'Avg Daily Revenue ($'}, color='daylight_bin')
+                    st.plotly_chart(fig_revenue_daylight_bin, use_container_width=True, key="revenue_daylight_bin_chart")
+            else:
+                st.info("Not enough aggregated daily data for binned analysis.")
+            
+            st.markdown("<hr style='margin-top: 20px; margin-bottom: 20px;'>", unsafe_allow_html=True)
+            
+            # Add merged data table at the end of the page
+            st.subheader("Merged Event and Weather Data")
+            
+            if not df_merged_with_weather.empty:
+                # Select relevant columns for display
+                display_columns = [
+                    'EventID', 'Event_Description', 'StartDate', 'OrderedAttendance', 'ActualRevenue',
+                    'temperature_2m_max', 'temperature_2m_min', 'precipitation_sum', 'rain_sum', 
+                    'snowfall_sum', 'windspeed_10m_max', 'weathercode', 'weather_condition', 'daylight_time'
+                ]
+                
+                # Filter to only columns that exist in the dataframe
+                available_columns = [col for col in display_columns if col in df_merged_with_weather.columns]
+                
+                if available_columns:
+                    # Create a copy with only the selected columns
+                    merged_display_df = df_merged_with_weather[available_columns].copy()
+                    
+                    # Format the dates and numeric columns
+                    if 'StartDate' in merged_display_df.columns:
+                        merged_display_df['StartDate'] = pd.to_datetime(merged_display_df['StartDate']).dt.strftime('%Y-%m-%d')
+                    
+                    if 'ActualRevenue' in merged_display_df.columns:
+                        merged_display_df['ActualRevenue'] = merged_display_df['ActualRevenue'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "")
+                    
+                    # Add a toggle to show/hide the data table
+                    show_data = st.checkbox("Show merged event and weather data table", value=False)
+                    
+                    if show_data:
+                        st.dataframe(merged_display_df, use_container_width=True)
+                        
+                        # Add download button for the data
+                        csv = df_merged_with_weather[available_columns].to_csv(index=False)
+                        st.download_button(
+                            label="Download Data as CSV",
+                            data=csv,
+                            file_name="event_weather_data.csv",
+                            mime="text/csv",
+                        )
+                else:
+                    st.warning("No common columns found between the merged dataframe and the selected display columns.")
+            else:
+                st.warning("No merged weather and event data available to display.")
