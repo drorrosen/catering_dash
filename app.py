@@ -1715,27 +1715,421 @@ Provided Business Group Impact Analysis Data (CSV):
             analysis_df = df_merged_with_weather.copy()
             event_level_for_impact = analysis_df.drop_duplicates(subset='EventID', keep='first').copy()
 
+            # Convert temperatures from Celsius to Fahrenheit
+            def celsius_to_fahrenheit(celsius):
+                if pd.isna(celsius):
+                    return celsius
+                return (celsius * 9/5) + 32
+
+            # Apply temperature conversion to relevant columns
+            temp_columns = ['temperature_2m_max', 'temperature_2m_min']
+            for col in temp_columns:
+                if col in analysis_df.columns:
+                    analysis_df[f'{col}_f'] = analysis_df[col].apply(celsius_to_fahrenheit)
+                if col in event_level_for_impact.columns:
+                    event_level_for_impact[f'{col}_f'] = event_level_for_impact[col].apply(celsius_to_fahrenheit)
+
             # Add new weather KPIs section
             st.markdown("### Weather Metrics Overview")
             
-            # Calculate average weather metrics
-            avg_max_temp = analysis_df['temperature_2m_max'].mean() if 'temperature_2m_max' in analysis_df.columns else 0
+            # Calculate average weather metrics (now in Fahrenheit)
+            avg_max_temp_f = analysis_df['temperature_2m_max_f'].mean() if 'temperature_2m_max_f' in analysis_df.columns else 0
+            avg_min_temp_f = analysis_df['temperature_2m_min_f'].mean() if 'temperature_2m_min_f' in analysis_df.columns else 0
             avg_precip = analysis_df['precipitation_sum'].mean() if 'precipitation_sum' in analysis_df.columns else 0
             avg_max_wind = analysis_df['windspeed_10m_max'].mean() if 'windspeed_10m_max' in analysis_df.columns else 0
             avg_daylight = analysis_df['daylight_time'].mean() if 'daylight_time' in analysis_df.columns else 0
             
             # Display weather KPIs in columns using the same styling as other tabs
-            weather_kpi_col1, weather_kpi_col2, weather_kpi_col3, weather_kpi_col4 = st.columns(4)
+            weather_kpi_col1, weather_kpi_col2, weather_kpi_col3, weather_kpi_col4, weather_kpi_col5 = st.columns(5)
             with weather_kpi_col1:
-                st.markdown(f'''<div class="metric-card"><p>AVG MAX TEMPERATURE</p><h2>{avg_max_temp:.1f}°C</h2></div>''', unsafe_allow_html=True)
+                st.markdown(f'''<div class="metric-card"><p>AVG MAX TEMPERATURE</p><h2>{avg_max_temp_f:.1f}°F</h2></div>''', unsafe_allow_html=True)
             with weather_kpi_col2:
-                st.markdown(f'''<div class="metric-card"><p>AVG DAILY PRECIPITATION</p><h2>{avg_precip:.2f}mm</h2></div>''', unsafe_allow_html=True)
+                st.markdown(f'''<div class="metric-card"><p>AVG MIN TEMPERATURE</p><h2>{avg_min_temp_f:.1f}°F</h2></div>''', unsafe_allow_html=True)
             with weather_kpi_col3:
-                st.markdown(f'''<div class="metric-card"><p>AVG MAX WIND SPEED</p><h2>{avg_max_wind:.1f}km/h</h2></div>''', unsafe_allow_html=True)
+                st.markdown(f'''<div class="metric-card"><p>AVG DAILY PRECIPITATION</p><h2>{avg_precip:.2f}mm</h2></div>''', unsafe_allow_html=True)
             with weather_kpi_col4:
+                st.markdown(f'''<div class="metric-card"><p>AVG MAX WIND SPEED</p><h2>{avg_max_wind:.1f}km/h</h2></div>''', unsafe_allow_html=True)
+            with weather_kpi_col5:
                 st.markdown(f'''<div class="metric-card"><p>AVG DAYLIGHT HOURS</p><h2>{avg_daylight:.1f}h</h2></div>''', unsafe_allow_html=True)
             
             st.markdown("<br>", unsafe_allow_html=True)
+
+            # Event & Revenue Analysis by Detailed Weather Conditions - Added at top
+            st.markdown("### Event & Revenue Analysis by Detailed Weather Conditions")
+            viz_col1_top, viz_col2_top = st.columns(2)
+            with viz_col1_top:
+                if 'EventID' in event_level_for_impact.columns and 'weather_condition' in event_level_for_impact.columns:
+                    event_count_by_cond = event_level_for_impact.groupby('weather_condition')['EventID'].nunique().reset_index(name='EventCount').sort_values(by='EventCount', ascending=False)
+                    fig_event_count_weather = px.bar(event_count_by_cond.head(10), y='weather_condition', x='EventCount', orientation='h', title='Event Count by Weather (Top 10)', labels={'EventCount': 'Number of Events', 'weather_condition': 'Weather'}, text='EventCount')
+                    fig_event_count_weather.update_traces(marker_color='#6495ED', texttemplate='%{text}', textposition='outside')
+                    fig_event_count_weather.update_layout(height=400, yaxis_title=None, plot_bgcolor='white', margin=dict(l=10, r=10, t=30, b=20), yaxis=dict(autorange="reversed"))
+                    st.plotly_chart(fig_event_count_weather, use_container_width=True, key="weather_impact_event_count_chart_at_top")
+                else: st.info("Data missing for 'Event Count by Weather' chart.")
+            with viz_col2_top:
+                if 'ActualRevenue' in event_level_for_impact.columns and 'weather_condition' in event_level_for_impact.columns:
+                    avg_revenue_by_cond = event_level_for_impact.groupby('weather_condition')['ActualRevenue'].mean().reset_index().sort_values(by='ActualRevenue', ascending=False)
+                    fig_avg_rev_weather = px.bar(avg_revenue_by_cond.head(10), y='weather_condition', x='ActualRevenue', orientation='h', title='Avg. Event Revenue by Weather (Top 10)', labels={'ActualRevenue': 'Avg. Revenue ($)', 'weather_condition': 'Weather'}, text='ActualRevenue')
+                    fig_avg_rev_weather.update_traces(marker_color='#FF7F50', texttemplate='$%{text:,.0f}', textposition='outside')
+                    fig_avg_rev_weather.update_layout(height=400, yaxis_title=None, plot_bgcolor='white', margin=dict(l=10, r=10, t=30, b=20), yaxis=dict(autorange="reversed"))
+                    st.plotly_chart(fig_avg_rev_weather, use_container_width=True, key="weather_impact_avg_rev_chart_at_top")
+                else: st.info("Data missing for 'Avg. Event Revenue by Weather' chart.")
+
+            st.markdown("<hr style='margin-top: 20px; margin-bottom: 20px;'>", unsafe_allow_html=True)
+
+            # NEW: Time Series Analysis Section
+            st.markdown("### Time Series Analysis: Weather-Business Ratios & Trends")
+            
+            # Prepare daily aggregated data for time series
+            if 'StartDate' in analysis_df.columns:
+                analysis_df['event_date'] = pd.to_datetime(analysis_df['StartDate']).dt.date
+                
+                # Aggregate daily metrics
+                daily_metrics = analysis_df.groupby('event_date').agg({
+                    'ActualRevenue': 'sum',
+                    'EventID': 'nunique',
+                    'OrderedAttendance': 'sum',
+                    'temperature_2m_max_f': 'first',  # Using Fahrenheit
+                    'temperature_2m_min_f': 'first',  # Using Fahrenheit
+                    'precipitation_sum': 'first',
+                    'windspeed_10m_max': 'first'
+                }).reset_index()
+                
+                daily_metrics.rename(columns={
+                    'ActualRevenue': 'Daily_Revenue',
+                    'EventID': 'Daily_Events',
+                    'OrderedAttendance': 'Daily_Attendance'
+                }, inplace=True)
+                
+                # Calculate ratio metrics (avoid division by zero)
+                daily_metrics['Revenue_per_Temp'] = daily_metrics['Daily_Revenue'] / daily_metrics['temperature_2m_max_f'].replace(0, np.nan)
+                daily_metrics['Events_per_Temp'] = daily_metrics['Daily_Events'] / daily_metrics['temperature_2m_max_f'].replace(0, np.nan)
+                daily_metrics['Revenue_per_Wind'] = daily_metrics['Daily_Revenue'] / daily_metrics['windspeed_10m_max'].replace(0, np.nan)
+                daily_metrics['Events_per_Wind'] = daily_metrics['Daily_Events'] / daily_metrics['windspeed_10m_max'].replace(0, np.nan)
+                
+                # Calculate weather efficiency metrics
+                daily_metrics['Temp_Revenue_Efficiency'] = daily_metrics['Daily_Revenue'] / (daily_metrics['temperature_2m_max_f'] + 1)  # +1 to avoid zero
+                daily_metrics['Precip_Impact_on_Events'] = daily_metrics['Daily_Events'] / (daily_metrics['precipitation_sum'] + 1)  # +1 to avoid zero
+                
+                if not daily_metrics.empty:
+                    # Create time series plots
+                    ts_col1, ts_col2 = st.columns(2)
+                    
+                    with ts_col1:
+                        # Revenue per Temperature over time
+                        fig_rev_temp_ratio = px.line(daily_metrics, x='event_date', y='Revenue_per_Temp',
+                                                   title='Revenue Efficiency per Temperature ($/°F) Over Time',
+                                                   labels={'Revenue_per_Temp': 'Revenue per °F ($)', 'event_date': 'Date'},
+                                                   hover_data={
+                                                       'Daily_Revenue': ':$,.0f',
+                                                       'temperature_2m_max_f': ':.1f°F',
+                                                       'Revenue_per_Temp': ':$,.2f'
+                                                   })
+                        fig_rev_temp_ratio.update_traces(line=dict(color='orange', width=2))
+                        fig_rev_temp_ratio.update_layout(height=400, plot_bgcolor='white')
+                        fig_rev_temp_ratio.update_traces(hovertemplate='<b>Date:</b> %{x}<br>' +
+                                                        '<b>Revenue/Temp Ratio:</b> $%{y:,.2f}<br>' +
+                                                        '<b>Daily Revenue:</b> %{customdata[0]:$,.0f}<br>' +
+                                                        '<b>Max Temperature:</b> %{customdata[1]:.1f}°F<extra></extra>',
+                                                        customdata=daily_metrics[['Daily_Revenue', 'temperature_2m_max_f']].values)
+                        st.plotly_chart(fig_rev_temp_ratio, use_container_width=True)
+                    
+                    
+                    with ts_col2:
+                        # Events per Temperature over time
+                        fig_events_temp_ratio = px.line(daily_metrics, x='event_date', y='Events_per_Temp',
+                                                      title='Event Efficiency per Temperature (Events/°F) Over Time',
+                                                      labels={'Events_per_Temp': 'Events per °F', 'event_date': 'Date'})
+                        fig_events_temp_ratio.update_traces(line=dict(color='blue', width=2))
+                        fig_events_temp_ratio.update_layout(height=400, plot_bgcolor='white')
+                        st.plotly_chart(fig_events_temp_ratio, use_container_width=True)
+                    
+                    # Second row of ratio charts
+                    ts_col3, ts_col4 = st.columns(2)
+                    
+                    with ts_col3:
+                        # Revenue performance vs precipitation (inverse relationship)
+                        fig_precip_impact = px.line(daily_metrics, x='event_date', y='Precip_Impact_on_Events',
+                                                  title='Event Resilience to Precipitation Over Time',
+                                                  labels={'Precip_Impact_on_Events': 'Events/(Precipitation+1)', 'event_date': 'Date'})
+                        fig_precip_impact.update_traces(line=dict(color='green', width=2))
+                        fig_precip_impact.update_layout(height=350, plot_bgcolor='white')
+                        st.plotly_chart(fig_precip_impact, use_container_width=True)
+                    
+                    with ts_col4:
+                        # Temperature-adjusted revenue efficiency
+                        fig_temp_efficiency = px.line(daily_metrics, x='event_date', y='Temp_Revenue_Efficiency',
+                                                    title='Temperature-Adjusted Revenue Efficiency Over Time',
+                                                    labels={'Temp_Revenue_Efficiency': 'Revenue/(Temp+1)', 'event_date': 'Date'})
+                        fig_temp_efficiency.update_traces(line=dict(color='red', width=2))
+                        fig_temp_efficiency.update_layout(height=350, plot_bgcolor='white')
+                        st.plotly_chart(fig_temp_efficiency, use_container_width=True)
+                else:
+                    st.info("Not enough data for time series analysis.")
+            
+            st.markdown("<hr style='margin-top: 20px; margin-bottom: 20px;'>", unsafe_allow_html=True)
+
+            # NEW: Weather-Scaled Business Metrics Heatmaps
+            st.markdown("### Business Metrics by Day & Month (Weather-Scaled)")
+            st.info("💡 These heatmaps show revenue/attendance values, but the color intensity represents weather conditions")
+            
+            if 'StartDate' in analysis_df.columns:
+                # Prepare combined data for weather-scaled heatmaps
+                combined_heatmap_data = analysis_df.copy()
+                combined_heatmap_data['DayOfWeekName'] = pd.to_datetime(combined_heatmap_data['StartDate']).dt.day_name()
+                days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                combined_heatmap_data['DayOfWeekName'] = pd.Categorical(combined_heatmap_data['DayOfWeekName'], categories=days_order, ordered=True)
+                combined_heatmap_data['MonthNum'] = pd.to_datetime(combined_heatmap_data['StartDate']).dt.month
+                
+                # Create pivot tables for both metrics and weather conditions
+                st.subheader("Business Metrics with Weather Color Scaling")
+                
+                # First, calculate all the pivot tables we'll need
+                # Revenue values
+                if 'ActualRevenue' in df_event_level_kpi.columns and 'temperature_2m_max_f' in combined_heatmap_data.columns:
+                    revenue_heatmap_df = df_event_level_kpi.copy()
+                    revenue_heatmap_df['DayOfWeekName'] = pd.to_datetime(revenue_heatmap_df['StartDate']).dt.day_name()
+                    revenue_heatmap_df['DayOfWeekName'] = pd.Categorical(revenue_heatmap_df['DayOfWeekName'], categories=days_order, ordered=True)
+                    revenue_heatmap_df['MonthNum'] = pd.to_datetime(revenue_heatmap_df['StartDate']).dt.month
+                    
+                    revenue_pivot = pd.pivot_table(
+                        revenue_heatmap_df,
+                        values='ActualRevenue',
+                        index='DayOfWeekName',
+                        columns='MonthNum',
+                        aggfunc='sum',
+                        fill_value=0
+                    ).reindex(index=days_order, fill_value=0)
+                    
+                    # Temperature values for color scale
+                    temp_pivot = pd.pivot_table(
+                        combined_heatmap_data,
+                        values='temperature_2m_max_f',
+                        index='DayOfWeekName',
+                        columns='MonthNum',
+                        aggfunc='mean',
+                        fill_value=np.nan
+                    ).reindex(index=days_order, fill_value=np.nan)
+                    
+                    # Precipitation values for color scale
+                    precip_pivot = pd.pivot_table(
+                        combined_heatmap_data,
+                        values='precipitation_sum',
+                        index='DayOfWeekName',
+                        columns='MonthNum',
+                        aggfunc='mean',
+                        fill_value=0
+                    ).reindex(index=days_order, fill_value=0)
+                    
+                    # Wind values for color scale
+                    wind_pivot = pd.pivot_table(
+                        combined_heatmap_data,
+                        values='windspeed_10m_max',
+                        index='DayOfWeekName',
+                        columns='MonthNum',
+                        aggfunc='mean',
+                        fill_value=0
+                    ).reindex(index=days_order, fill_value=0)
+                
+                # Attendance values
+                attendees_pivot = None
+                if 'OrderedAttendance' in df_event_max_attendance.columns:
+                    attendees_heatmap_df = df_event_max_attendance.copy()
+                    attendees_heatmap_df['DayOfWeekName'] = pd.to_datetime(attendees_heatmap_df['StartDate']).dt.day_name()
+                    attendees_heatmap_df['DayOfWeekName'] = pd.Categorical(attendees_heatmap_df['DayOfWeekName'], categories=days_order, ordered=True)
+                    attendees_heatmap_df['MonthNum'] = pd.to_datetime(attendees_heatmap_df['StartDate']).dt.month
+                    
+                    attendees_pivot = pd.pivot_table(
+                        attendees_heatmap_df,
+                        values='OrderedAttendance',
+                        index='DayOfWeekName',
+                        columns='MonthNum',
+                        aggfunc='mean',
+                        fill_value=0
+                    ).reindex(index=days_order, fill_value=0)
+                
+                # Row 1: Temperature-based heatmaps
+                st.markdown("##### Temperature Impact")
+                temp_row_col1, temp_row_col2 = st.columns(2)
+                
+                with temp_row_col1:
+                    # Revenue with Temperature Color Scale
+                    if not revenue_pivot.empty and not temp_pivot.empty:
+                        fig_rev_temp_heatmap = go.Figure(data=go.Heatmap(
+                            z=temp_pivot.values,  # Color based on temperature
+                            x=[datetime(2000,i,1).strftime('%b') for i in temp_pivot.columns],
+                            y=temp_pivot.index,
+                            text=revenue_pivot.values,  # Show revenue values as text
+                            texttemplate='$%{text:,.0f}',
+                            textfont={"size": 10},
+                            colorscale="RdYlBu_r",
+                            colorbar=dict(title="Avg Temp (°F)"),
+                            hovertemplate='<b>%{y}, %{x}</b><br>' +
+                                        'Revenue: $%{text:,.0f}<br>' +
+                                        'Avg Temperature: %{z:.1f}°F<extra></extra>'
+                        ))
+                        fig_rev_temp_heatmap.update_layout(
+                            title="Revenue by Day & Month<br><sub>Color: Avg Temperature (°F)</sub>",
+                            xaxis_title="Month",
+                            yaxis_title="Day of Week",
+                            height=450,
+                            plot_bgcolor='white',
+                            margin=dict(t=70, b=10, l=10, r=10)
+                        )
+                        st.plotly_chart(fig_rev_temp_heatmap, use_container_width=True)
+                    else:
+                        st.info("No data for Revenue-Temperature heatmap.")
+                
+                with temp_row_col2:
+                    # Attendance with Temperature Color Scale
+                    if attendees_pivot is not None and not attendees_pivot.empty and not temp_pivot.empty:
+                        fig_att_temp_heatmap = go.Figure(data=go.Heatmap(
+                            z=temp_pivot.values,  # Color based on temperature
+                            x=[datetime(2000,i,1).strftime('%b') for i in temp_pivot.columns],
+                            y=temp_pivot.index,
+                            text=attendees_pivot.values,  # Show attendance values as text
+                            texttemplate='%{text:.0f}',
+                            textfont={"size": 10},
+                            colorscale="RdYlBu_r",
+                            colorbar=dict(title="Avg Temp (°F)"),
+                            hovertemplate='<b>%{y}, %{x}</b><br>' +
+                                        'Avg Attendees: %{text:.0f}<br>' +
+                                        'Avg Temperature: %{z:.1f}°F<extra></extra>'
+                        ))
+                        fig_att_temp_heatmap.update_layout(
+                            title="Avg Attendees by Day & Month<br><sub>Color: Avg Temperature (°F)</sub>",
+                            xaxis_title="Month",
+                            yaxis_title="Day of Week",
+                            height=450,
+                            plot_bgcolor='white',
+                            margin=dict(t=70, b=10, l=10, r=10)
+                        )
+                        st.plotly_chart(fig_att_temp_heatmap, use_container_width=True)
+                    else:
+                        st.info("No data for Attendance-Temperature heatmap.")
+                
+                # Row 2: Precipitation-based heatmaps
+                st.markdown("##### Precipitation Impact")
+                precip_row_col1, precip_row_col2 = st.columns(2)
+                
+                with precip_row_col1:
+                    # Revenue with Precipitation Color Scale
+                    if not revenue_pivot.empty and not precip_pivot.empty:
+                        fig_rev_precip_heatmap = go.Figure(data=go.Heatmap(
+                            z=precip_pivot.values,  # Color based on precipitation
+                            x=[datetime(2000,i,1).strftime('%b') for i in precip_pivot.columns],
+                            y=precip_pivot.index,
+                            text=revenue_pivot.values,  # Show revenue values as text
+                            texttemplate='$%{text:,.0f}',
+                            textfont={"size": 10},
+                            colorscale="Blues",
+                            colorbar=dict(title="Avg Precip (mm)"),
+                            hovertemplate='<b>%{y}, %{x}</b><br>' +
+                                        'Revenue: $%{text:,.0f}<br>' +
+                                        'Avg Precipitation: %{z:.2f} mm<extra></extra>'
+                        ))
+                        fig_rev_precip_heatmap.update_layout(
+                            title="Revenue by Day & Month<br><sub>Color: Avg Precipitation (mm)</sub>",
+                            xaxis_title="Month",
+                            yaxis_title="Day of Week",
+                            height=450,
+                            plot_bgcolor='white',
+                            margin=dict(t=70, b=10, l=10, r=10)
+                        )
+                        st.plotly_chart(fig_rev_precip_heatmap, use_container_width=True)
+                    else:
+                        st.info("No data for Revenue-Precipitation heatmap.")
+                
+                with precip_row_col2:
+                    # Attendance with Precipitation Color Scale
+                    if attendees_pivot is not None and not attendees_pivot.empty and not precip_pivot.empty:
+                        fig_att_precip_heatmap = go.Figure(data=go.Heatmap(
+                            z=precip_pivot.values,  # Color based on precipitation
+                            x=[datetime(2000,i,1).strftime('%b') for i in precip_pivot.columns],
+                            y=precip_pivot.index,
+                            text=attendees_pivot.values,  # Show attendance values as text
+                            texttemplate='%{text:.0f}',
+                            textfont={"size": 10},
+                            colorscale="Blues",
+                            colorbar=dict(title="Avg Precip (mm)"),
+                            hovertemplate='<b>%{y}, %{x}</b><br>' +
+                                        'Avg Attendees: %{text:.0f}<br>' +
+                                        'Avg Precipitation: %{z:.2f} mm<extra></extra>'
+                        ))
+                        fig_att_precip_heatmap.update_layout(
+                            title="Avg Attendees by Day & Month<br><sub>Color: Avg Precipitation (mm)</sub>",
+                            xaxis_title="Month",
+                            yaxis_title="Day of Week",
+                            height=450,
+                            plot_bgcolor='white',
+                            margin=dict(t=70, b=10, l=10, r=10)
+                        )
+                        st.plotly_chart(fig_att_precip_heatmap, use_container_width=True)
+                    else:
+                        st.info("No data for Attendance-Precipitation heatmap.")
+                
+                # Row 3: Wind Speed-based heatmaps
+                st.markdown("##### Wind Speed Impact")
+                wind_row_col1, wind_row_col2 = st.columns(2)
+                
+                with wind_row_col1:
+                    # Revenue with Wind Speed Color Scale
+                    if not revenue_pivot.empty and not wind_pivot.empty:
+                        fig_rev_wind_heatmap = go.Figure(data=go.Heatmap(
+                            z=wind_pivot.values,  # Color based on wind speed
+                            x=[datetime(2000,i,1).strftime('%b') for i in wind_pivot.columns],
+                            y=wind_pivot.index,
+                            text=revenue_pivot.values,  # Show revenue values as text
+                            texttemplate='$%{text:,.0f}',
+                            textfont={"size": 10},
+                            colorscale="Oranges",
+                            colorbar=dict(title="Avg Wind (km/h)"),
+                            hovertemplate='<b>%{y}, %{x}</b><br>' +
+                                        'Revenue: $%{text:,.0f}<br>' +
+                                        'Avg Wind Speed: %{z:.1f} km/h<extra></extra>'
+                        ))
+                        fig_rev_wind_heatmap.update_layout(
+                            title="Revenue by Day & Month<br><sub>Color: Avg Wind Speed (km/h)</sub>",
+                            xaxis_title="Month",
+                            yaxis_title="Day of Week",
+                            height=450,
+                            plot_bgcolor='white',
+                            margin=dict(t=70, b=10, l=10, r=10)
+                        )
+                        st.plotly_chart(fig_rev_wind_heatmap, use_container_width=True)
+                    else:
+                        st.info("No data for Revenue-Wind Speed heatmap.")
+                
+                with wind_row_col2:
+                    # Attendance with Wind Speed Color Scale
+                    if attendees_pivot is not None and not attendees_pivot.empty and not wind_pivot.empty:
+                        fig_att_wind_heatmap = go.Figure(data=go.Heatmap(
+                            z=wind_pivot.values,  # Color based on wind speed
+                            x=[datetime(2000,i,1).strftime('%b') for i in wind_pivot.columns],
+                            y=wind_pivot.index,
+                            text=attendees_pivot.values,  # Show attendance values as text
+                            texttemplate='%{text:.0f}',
+                            textfont={"size": 10},
+                            colorscale="Oranges",
+                            colorbar=dict(title="Avg Wind (km/h)"),
+                            hovertemplate='<b>%{y}, %{x}</b><br>' +
+                                        'Avg Attendees: %{text:.0f}<br>' +
+                                        'Avg Wind Speed: %{z:.1f} km/h<extra></extra>'
+                        ))
+                        fig_att_wind_heatmap.update_layout(
+                            title="Avg Attendees by Day & Month<br><sub>Color: Avg Wind Speed (km/h)</sub>",
+                            xaxis_title="Month",
+                            yaxis_title="Day of Week",
+                            height=450,
+                            plot_bgcolor='white',
+                            margin=dict(t=70, b=10, l=10, r=10)
+                        )
+                        st.plotly_chart(fig_att_wind_heatmap, use_container_width=True)
+                    else:
+                        st.info("No data for Attendance-Wind Speed heatmap.")
+            else:
+                st.warning("StartDate column not available for heatmap generation.")
+
+            st.markdown("<hr style='margin-top: 20px; margin-bottom: 20px;'>", unsafe_allow_html=True)
 
             st.markdown("### Key Performance Indicators: Event Metrics by Weather")
             if 'ActualRevenue' in event_level_for_impact.columns and 'EventID' in event_level_for_impact.columns and 'simple_weather' in event_level_for_impact.columns:
@@ -1754,44 +2148,44 @@ Provided Business Group Impact Analysis Data (CSV):
                 #st.warning("Required columns for weather KPIs (ActualRevenue, EventID, simple_weather) not found.")
                 pass
 
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown("### Event & Revenue Analysis by Detailed Weather Conditions")
-            viz_col1, viz_col2 = st.columns(2)
-            with viz_col1:
-                if 'EventID' in event_level_for_impact.columns and 'weather_condition' in event_level_for_impact.columns:
-                    event_count_by_cond = event_level_for_impact.groupby('weather_condition')['EventID'].nunique().reset_index(name='EventCount').sort_values(by='EventCount', ascending=False)
-                    fig_event_count_weather = px.bar(event_count_by_cond.head(10), y='weather_condition', x='EventCount', orientation='h', title='Event Count by Weather (Top 10)', labels={'EventCount': 'Number of Events', 'weather_condition': 'Weather'}, text='EventCount')
-                    fig_event_count_weather.update_traces(marker_color='#6495ED', texttemplate='%{text}', textposition='outside')
-                    fig_event_count_weather.update_layout(height=400, yaxis_title=None, plot_bgcolor='white', margin=dict(l=10, r=10, t=30, b=20), yaxis=dict(autorange="reversed"))
-                    st.plotly_chart(fig_event_count_weather, use_container_width=True, key="weather_impact_event_count_chart_v2")
-                else: st.info("Data missing for 'Event Count by Weather' chart.")
-            with viz_col2:
-                if 'ActualRevenue' in event_level_for_impact.columns and 'weather_condition' in event_level_for_impact.columns:
-                    avg_revenue_by_cond = event_level_for_impact.groupby('weather_condition')['ActualRevenue'].mean().reset_index().sort_values(by='ActualRevenue', ascending=False)
-                    fig_avg_rev_weather = px.bar(avg_revenue_by_cond.head(10), y='weather_condition', x='ActualRevenue', orientation='h', title='Avg. Event Revenue by Weather (Top 10)', labels={'ActualRevenue': 'Avg. Revenue ($)', 'weather_condition': 'Weather'}, text='ActualRevenue')
-                    fig_avg_rev_weather.update_traces(marker_color='#FF7F50', texttemplate='$%{text:,.0f}', textposition='outside')
-                    fig_avg_rev_weather.update_layout(height=400, yaxis_title=None, plot_bgcolor='white', margin=dict(l=10, r=10, t=30, b=20), yaxis=dict(autorange="reversed"))
-                    st.plotly_chart(fig_avg_rev_weather, use_container_width=True, key="weather_impact_avg_rev_chart_v2")
-                else: st.info("Data missing for 'Avg. Event Revenue by Weather' chart.")
+            # st.markdown("<br>", unsafe_allow_html=True)
+            # st.markdown("### Event & Revenue Analysis by Detailed Weather Conditions")
+            # viz_col1, viz_col2 = st.columns(2)
+            # with viz_col1:
+            #     if 'EventID' in event_level_for_impact.columns and 'weather_condition' in event_level_for_impact.columns:
+            #         event_count_by_cond = event_level_for_impact.groupby('weather_condition')['EventID'].nunique().reset_index(name='EventCount').sort_values(by='EventCount', ascending=False)
+            #         fig_event_count_weather = px.bar(event_count_by_cond.head(10), y='weather_condition', x='EventCount', orientation='h', title='Event Count by Weather (Top 10)', labels={'EventCount': 'Number of Events', 'weather_condition': 'Weather'}, text='EventCount')
+            #         fig_event_count_weather.update_traces(marker_color='#6495ED', texttemplate='%{text}', textposition='outside')
+            #         fig_event_count_weather.update_layout(height=400, yaxis_title=None, plot_bgcolor='white', margin=dict(l=10, r=10, t=30, b=20), yaxis=dict(autorange="reversed"))
+            #         st.plotly_chart(fig_event_count_weather, use_container_width=True, key="weather_impact_event_count_chart_v2")
+            #     else: st.info("Data missing for 'Event Count by Weather' chart.")
+            # with viz_col2:
+            #     if 'ActualRevenue' in event_level_for_impact.columns and 'weather_condition' in event_level_for_impact.columns:
+            #         avg_revenue_by_cond = event_level_for_impact.groupby('weather_condition')['ActualRevenue'].mean().reset_index().sort_values(by='ActualRevenue', ascending=False)
+            #         fig_avg_rev_weather = px.bar(avg_revenue_by_cond.head(10), y='weather_condition', x='ActualRevenue', orientation='h', title='Avg. Event Revenue by Weather (Top 10)', labels={'ActualRevenue': 'Avg. Revenue ($)', 'weather_condition': 'Weather'}, text='ActualRevenue')
+            #         fig_avg_rev_weather.update_traces(marker_color='#FF7F50', texttemplate='$%{text:,.0f}', textposition='outside')
+            #         fig_avg_rev_weather.update_layout(height=400, yaxis_title=None, plot_bgcolor='white', margin=dict(l=10, r=10, t=30, b=20), yaxis=dict(autorange="reversed"))
+            #         st.plotly_chart(fig_avg_rev_weather, use_container_width=True, key="weather_impact_avg_rev_chart_v2")
+            #     else: st.info("Data missing for 'Avg. Event Revenue by Weather' chart.")
 
             st.markdown("<hr style='margin-top: 20px; margin-bottom: 20px;'>", unsafe_allow_html=True)
             st.markdown("### Analysis by Weather Variable Categories")
 
-            # Prepare data for daily metrics to be binned
+            # Prepare data for daily metrics to be binned (now using Fahrenheit)
             analysis_df['event_date'] = pd.to_datetime(analysis_df['StartDate']).dt.date
             daily_event_metrics_for_binning = analysis_df.groupby('event_date').agg(
                 TotalDailyRevenue=('ActualRevenue', 'sum'),
                 TotalDailyEvents=('EventID', 'nunique')
             ).reset_index()
-            daily_weather_vars_for_binning = analysis_df[['event_date', 'temperature_2m_max', 'precipitation_sum', 'windspeed_10m_max', 'daylight_time']].drop_duplicates(subset=['event_date'], keep='first')
+            daily_weather_vars_for_binning = analysis_df[['event_date', 'temperature_2m_max_f', 'precipitation_sum', 'windspeed_10m_max', 'daylight_time']].drop_duplicates(subset=['event_date'], keep='first')
             binned_analysis_df = pd.merge(daily_event_metrics_for_binning, daily_weather_vars_for_binning, on='event_date', how='left')
-            binned_analysis_df.dropna(subset=['temperature_2m_max', 'windspeed_10m_max', 'daylight_time', 'precipitation_sum'], inplace=True) # Ensure no NaN for binning columns
+            binned_analysis_df.dropna(subset=['temperature_2m_max_f', 'windspeed_10m_max', 'daylight_time', 'precipitation_sum'], inplace=True) # Ensure no NaN for binning columns
 
             if not binned_analysis_df.empty:
-                # Temperature Bins
-                temp_bins = [-np.inf, 0, 10, 20, 30, np.inf]
-                temp_labels = ['<0°C', '0-10°C', '10-20°C', '20-30°C', '>30°C']
-                binned_analysis_df['temp_bin'] = pd.cut(binned_analysis_df['temperature_2m_max'], bins=temp_bins, labels=temp_labels, right=False)
+                # Temperature Bins (now in Fahrenheit)
+                temp_bins = [-np.inf, 32, 50, 68, 86, np.inf]  # Fahrenheit: <32°F, 32-50°F, 50-68°F, 68-86°F, >86°F
+                temp_labels = ['<32°F', '32-50°F', '50-68°F', '68-86°F', '>86°F']
+                binned_analysis_df['temp_bin'] = pd.cut(binned_analysis_df['temperature_2m_max_f'], bins=temp_bins, labels=temp_labels, right=False)
                 
                 # Wind Speed Bins
                 wind_bins = [0, 15, 30, 45, np.inf] # km/h example bins
@@ -1809,9 +2203,9 @@ Provided Business Group Impact Analysis Data (CSV):
                 binned_analysis_df['precip_bin'] = pd.cut(binned_analysis_df['precipitation_sum'], bins=precip_bins, labels=precip_labels, right=True, include_lowest=True)
 
                 # --- Plotting binned data ---
-                st.subheader("Daily Event Metrics by Temperature Range")
-                corr_temp_events = binned_analysis_df['temperature_2m_max'].corr(binned_analysis_df['TotalDailyEvents'])
-                corr_temp_revenue = binned_analysis_df['temperature_2m_max'].corr(binned_analysis_df['TotalDailyRevenue'])
+                st.subheader("Daily Event Metrics by Temperature Range (°F)")
+                corr_temp_events = binned_analysis_df['temperature_2m_max_f'].corr(binned_analysis_df['TotalDailyEvents'])
+                corr_temp_revenue = binned_analysis_df['temperature_2m_max_f'].corr(binned_analysis_df['TotalDailyRevenue'])
                 bin_col1, bin_col2 = st.columns(2)
                 with bin_col1:
                     avg_events_by_temp = binned_analysis_df.groupby('temp_bin', observed=False)['TotalDailyEvents'].mean().reset_index()
@@ -1869,19 +2263,29 @@ Provided Business Group Impact Analysis Data (CSV):
             st.subheader("Merged Event and Weather Data")
             
             if not df_merged_with_weather.empty:
-                # Select relevant columns for display
+                # Select relevant columns for display (including Fahrenheit temperatures)
                 display_columns = [
                     'EventID', 'Event_Description', 'StartDate', 'OrderedAttendance', 'ActualRevenue',
-                    'temperature_2m_max', 'temperature_2m_min', 'precipitation_sum', 'rain_sum', 
+                    'temperature_2m_max_f', 'temperature_2m_min_f', 'precipitation_sum', 'rain_sum', 
                     'snowfall_sum', 'windspeed_10m_max', 'weathercode', 'weather_condition', 'daylight_time'
                 ]
                 
                 # Filter to only columns that exist in the dataframe
                 available_columns = [col for col in display_columns if col in df_merged_with_weather.columns]
                 
+                # Add Fahrenheit columns to the merged display dataframe if they don't exist
+                df_merged_display_copy = df_merged_with_weather.copy()
+                if 'temperature_2m_max' in df_merged_display_copy.columns and 'temperature_2m_max_f' not in df_merged_display_copy.columns:
+                    df_merged_display_copy['temperature_2m_max_f'] = df_merged_display_copy['temperature_2m_max'].apply(celsius_to_fahrenheit)
+                if 'temperature_2m_min' in df_merged_display_copy.columns and 'temperature_2m_min_f' not in df_merged_display_copy.columns:
+                    df_merged_display_copy['temperature_2m_min_f'] = df_merged_display_copy['temperature_2m_min'].apply(celsius_to_fahrenheit)
+                
+                # Update available columns list
+                available_columns = [col for col in display_columns if col in df_merged_display_copy.columns]
+                
                 if available_columns:
                     # Create a copy with only the selected columns
-                    merged_display_df = df_merged_with_weather[available_columns].copy()
+                    merged_display_df = df_merged_display_copy[available_columns].copy()
                     
                     # Format the dates and numeric columns
                     if 'StartDate' in merged_display_df.columns:
@@ -1890,6 +2294,12 @@ Provided Business Group Impact Analysis Data (CSV):
                     if 'ActualRevenue' in merged_display_df.columns:
                         merged_display_df['ActualRevenue'] = merged_display_df['ActualRevenue'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "")
                     
+                    # Format temperature columns
+                    if 'temperature_2m_max_f' in merged_display_df.columns:
+                        merged_display_df['temperature_2m_max_f'] = merged_display_df['temperature_2m_max_f'].apply(lambda x: f"{x:.1f}°F" if pd.notna(x) else "")
+                    if 'temperature_2m_min_f' in merged_display_df.columns:
+                        merged_display_df['temperature_2m_min_f'] = merged_display_df['temperature_2m_min_f'].apply(lambda x: f"{x:.1f}°F" if pd.notna(x) else "")
+                    
                     # Add a toggle to show/hide the data table
                     show_data = st.checkbox("Show merged event and weather data table", value=False)
                     
@@ -1897,7 +2307,7 @@ Provided Business Group Impact Analysis Data (CSV):
                         st.dataframe(merged_display_df, use_container_width=True)
                         
                         # Add download button for the data
-                        csv = df_merged_with_weather[available_columns].to_csv(index=False)
+                        csv = df_merged_display_copy[available_columns].to_csv(index=False)
                         st.download_button(
                             label="Download Data as CSV",
                             data=csv,
@@ -1908,3 +2318,29 @@ Provided Business Group Impact Analysis Data (CSV):
                     st.warning("No common columns found between the merged dataframe and the selected display columns.")
             else:
                 st.warning("No merged weather and event data available to display.")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # # Event & Revenue Analysis by Detailed Weather Conditions - moved to top
+            # st.markdown("### Event & Revenue Analysis by Detailed Weather Conditions")
+            # viz_col1_top, viz_col2_top = st.columns(2)
+            # with viz_col1_top:
+            #     if 'EventID' in event_level_for_impact.columns and 'weather_condition' in event_level_for_impact.columns:
+            #         event_count_by_cond = event_level_for_impact.groupby('weather_condition')['EventID'].nunique().reset_index(name='EventCount').sort_values(by='EventCount', ascending=False)
+            #         fig_event_count_weather = px.bar(event_count_by_cond.head(10), y='weather_condition', x='EventCount', orientation='h', title='Event Count by Weather (Top 10)', labels={'EventCount': 'Number of Events', 'weather_condition': 'Weather'}, text='EventCount')
+            #         fig_event_count_weather.update_traces(marker_color='#6495ED', texttemplate='%{text}', textposition='outside')
+            #         fig_event_count_weather.update_layout(height=400, yaxis_title=None, plot_bgcolor='white', margin=dict(l=10, r=10, t=30, b=20), yaxis=dict(autorange="reversed"))
+            #         st.plotly_chart(fig_event_count_weather, use_container_width=True, key="weather_impact_event_count_chart_top")
+            #     else: st.info("Data missing for 'Event Count by Weather' chart.")
+            # with viz_col2_top:
+            #     if 'ActualRevenue' in event_level_for_impact.columns and 'weather_condition' in event_level_for_impact.columns:
+            #         avg_revenue_by_cond = event_level_for_impact.groupby('weather_condition')['ActualRevenue'].mean().reset_index().sort_values(by='ActualRevenue', ascending=False)
+            #         fig_avg_rev_weather = px.bar(avg_revenue_by_cond.head(10), y='weather_condition', x='ActualRevenue', orientation='h', title='Avg. Event Revenue by Weather (Top 10)', labels={'ActualRevenue': 'Avg. Revenue ($)', 'weather_condition': 'Weather'}, text='ActualRevenue')
+            #         fig_avg_rev_weather.update_traces(marker_color='#FF7F50', texttemplate='$%{text:,.0f}', textposition='outside')
+            #         fig_avg_rev_weather.update_layout(height=400, yaxis_title=None, plot_bgcolor='white', margin=dict(l=10, r=10, t=30, b=20), yaxis=dict(autorange="reversed"))
+            #         st.plotly_chart(fig_avg_rev_weather, use_container_width=True, key="weather_impact_avg_rev_chart_top")
+            #     else: st.info("Data missing for 'Avg. Event Revenue by Weather' chart.")
+
+            # st.markdown("<hr style='margin-top: 20px; margin-bottom: 20px;'>", unsafe_allow_html=True)
+
+            # NEW: Time Series Analysis Section
